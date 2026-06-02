@@ -1,0 +1,76 @@
+# Tome — full stack. Run:  cp .env.example .env && docker compose up -d --build
+# Library UI (React): http://localhost:3000   ·   Gateway API: http://localhost:8080/docs
+# MCP/OpenAPI: http://localhost:8765/docs       ·   MinIO console: http://localhost:9001
+
+x-app: &app
+  build: .
+  env_file: .env
+  depends_on:
+    postgres: { condition: service_healthy }
+  volumes:
+    - stage:/app/_stage          # shared upload stage (gateway ↔ worker)
+    - store:/app/_store          # shared object store (LocalStore) for all app containers
+                                 # (for production, MinIO is recommended: S3_USE=true + boto3)
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16     # Postgres 16 + pgvector
+    environment:
+      POSTGRES_DB: tome
+      # CHANGE the password in .env (POSTGRES_PASSWORD) before a production deploy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # NO host port: the DB is reachable only inside the compose network (app services
+    # connect via `postgres:5432`). Not exposed to the network → does not bypass app auth.
+    # For local debugging: docker compose exec postgres psql -U postgres
+    expose: [ "5432" ]
+
+  tika:
+    image: apache/tika:latest-full
+    # internal parsing service — no host port
+    expose: [ "9998" ]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      # CHANGE the credentials in .env before a production deploy (the defaults are insecure)
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes: [ "miniodata:/data" ]
+    # NO host port (default credentials!). To open the console locally,
+    # add  ports: ["127.0.0.1:9001:9001"]  temporarily.
+    expose: [ "9000", "9001" ]
+
+  gateway:
+    <<: *app
+    environment:
+      RUN_INPROCESS_WORKER: "false"   # the worker is moved out into a separate service
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports: [ "8080:8080" ]
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "tome.worker"]
+    deploy: { replicas: 2 }           # horizontal scaling of import
+
+  mcp:
+    <<: *app
+    command: ["sh", "-c", "mcpo --host 0.0.0.0 --port 8765 ${MCPO_API_KEY:+--api-key $MCPO_API_KEY} -- python -m mcp_server.server"]
+    ports: [ "8765:8765" ]
+
+  webui:
+    build: ./webui                    # React+Vite → nginx (proxy /v1 to gateway)
+    depends_on: [ gateway ]
+    ports: [ "3000:80" ]
+
+volumes:
+  pgdata:
+  miniodata:
+  stage:
+  store:

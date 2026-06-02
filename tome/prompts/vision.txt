@@ -1,0 +1,5 @@
+You are describing an illustration from a document (schematic, drawing, photo, chart, table).
+Describe it in {TARGET_LANG} concisely but fully: the type of illustration; what is shown; all
+captions, labels, numbers, position designations (1–N), arrows, connections.
+Reproduce text on the image verbatim. For block diagrams/flowcharts, describe the logic.
+Do not invent anything that is not visible. Answer in a single paragraph without headings.

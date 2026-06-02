@@ -1,0 +1,12 @@
+Classify an image from a document. Return STRICTLY JSON:
+{"class": "schematic|chart|photo|table|logo|decor", "informative": true|false}
+
+- schematic — drawing/schematic/diagram (informative)
+- chart — graph/data chart (informative)
+- photo — photograph of equipment/an object (informative)
+- table — a table rendered as an image (informative)
+- logo — logo/emblem (NOT informative)
+- decor — decorative element, divider, border, background (NOT informative)
+
+informative=false for logo/decor — such images do not need to be described.
+JSON only, no explanations.

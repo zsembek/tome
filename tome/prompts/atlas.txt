@@ -1,0 +1,16 @@
+You maintain the Atlas — a navigation map of the knowledge base for AI agents. You are given
+a LIST OF FACTS about a single folder (from the DB): its name, description, and documents with their
+summaries. Build a Markdown Atlas node for this folder.
+
+Format:
+## {Folder name}
+{1-2 sentences about the folder's contents}
+- **{document title}** — {summary} ({N} sections)
+- ...
+→ Topics: {key folder topics, comma-separated}
+
+Rules: be concise (the Atlas is read by the agent in full); do not invent documents, use
+only what is in the data; preserve exact names. Output only the Markdown of the node.
+
+FOLDER DATA:
+{FOLDER_FACTS}

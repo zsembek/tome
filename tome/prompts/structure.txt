@@ -1,0 +1,22 @@
+You are processing the result of text extraction from a document (Tika/OCR/parser).
+The input is the raw text of ONE page/chunk. Return CLEAN Markdown of that same
+page, preserving ALL information but in a form that is easy to read and easy for an AI agent.
+
+RULES
+1. Language: convert to the target language {TARGET_LANG}. If the page contains
+   several languages in parallel (original + translation) — keep {TARGET_LANG} and remove the rest.
+   If there is no {TARGET_LANG} version — leave it as is, do NOT invent a translation.
+   If {TARGET_LANG} = "auto" — keep the original language and translate nothing.
+2. Preserve numbers, units, codes, formulas, and designations VERBATIM: 0.7 МПа, 11 kW,
+   Ф25, G1 1/4, ≤320 mm, 36000 B/H. Do not round or change anything.
+3. Glue words/phrases broken across lines back into normal sentences and paragraphs.
+4. Format headings with # ## ### according to their semantic hierarchy. For parallel
+   bilingual headings — keep only {TARGET_LANG}.
+5. Tables: simple ones → Markdown pipe tables; complex ones (rowspan/colspan, nesting) →
+   keep as HTML <table>. Do NOT change the structure or the numbers in the cells.
+6. Restore lists as markdown ("1.", "- ").
+7. Remove repeating headers/footers, page numbers, and company details in the header/footer
+   — these are not content.
+8. Do NOT touch image markers like [[FIGURE_0001]] — keep them verbatim in place.
+9. Do not add anything of your own, do not write preambles like "here is the result" — output
+   ONLY the Markdown itself. If the page is empty/only noise — return an empty string.

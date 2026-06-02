@@ -1,0 +1,301 @@
+"""Pipeline orchestrator: extract→structure→verify→vision→name→split→index→atlas.
+
+Takes file bytes, runs all stages, writes atomically to the DB, refreshes the Atlas.
+Each stage writes progress/tokens/faithfulness to the job."""
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+
+from tome.config import Config, get_config
+from tome.db import DB
+from tome.embed import get_embedder
+from tome.extract import extract_document
+from tome.extract.base import Figure
+from tome.extract import pdfutil
+from tome.pipeline import atlas as atlas_mod
+from tome.pipeline.chunk import chunk_section
+from tome.pipeline.clean import clean
+from tome.pipeline.naming import derive_metadata
+from tome.pipeline.split import build_sections, split_parts
+from tome.pipeline.structure import structure_page
+from tome.pipeline.verify import verify
+from tome.pipeline.vision import classify_and_describe
+from tome.store import store_document_atomic
+from tome.storage import get_store, sha256
+
+log = logging.getLogger(__name__)
+_FIG_TOKEN = "[[FIGURE_{n:04d}]]"
+
+
+def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime: str,
+           folder_path: str | None = None, folder_id: int | None = None,
+           auto_file: bool = False,
+           job_id: int | None = None, cfg: Config | None = None) -> int:
+    cfg = cfg or get_config()
+    # per-workspace settings override env limits (§ settings)
+    try:
+        ws_settings = db.workspace_settings(workspace_id)
+        for k in ("max_section_chars", "min_section_chars", "chunk_tokens",
+                  "chunk_overlap", "max_md_chars", "faithfulness_min", "target_lang"):
+            if k in ws_settings:
+                setattr(cfg, k, ws_settings[k])
+    except Exception:
+        pass
+    tlang = cfg.target_lang
+    tok_in = tok_out = 0
+    store = get_store(cfg)
+    doc_key = sha256(file_bytes)[:16]
+    pending_assets: list[dict] = []   # populated after the document is created
+
+    def progress(stage: str, p: float):
+        if job_id:
+            db.update_job(job_id, stage=stage, progress=p)
+
+    # 0. original into object store
+    try:
+        src_key = f"sources/{doc_key}/{filename or 'document'}"
+        store.put(src_key, file_bytes, mime)
+        pending_assets.append({"kind": "source", "object_key": src_key,
+                               "mime": mime, "sha": sha256(file_bytes)})
+    except Exception as exc:
+        log.warning("failed to store original: %s", exc)
+
+    # 1. Extract
+    progress("extract", 0.1)
+    extracted = extract_document(file_bytes, mime=mime, filename=filename, cfg=cfg)
+
+    # 2-4. Per page: structure → verify → vision (with figure-token substitution)
+    progress("structure", 0.3)
+    page_mds: list[str] = []
+    raw_pages: list[str] = []          # raw extract — basis for document-level faithfulness
+    fig_descriptions: dict[str, str] = {}
+    fig_counter = 0
+    worst_faith = 1.0
+    # average extract confidence (if the provider reports it) — an indicator of OCR quality
+    page_confidences = [p.confidence for p in extracted.pages if p.confidence is not None]
+    extract_confidence = round(sum(page_confidences) / len(page_confidences), 3) if page_confidences else None
+
+    for page in extracted.pages:
+        raw = page.text or ""
+        raw_pages.append(raw)
+        # insert figure tokens (vision will substitute descriptions)
+        fig_map: dict[str, Figure] = {}
+        for fig in page.figures:
+            token = _FIG_TOKEN.format(n=fig_counter)
+            raw = raw + f"\n\n{token}\n"
+            fig_map[token] = fig
+            fig_counter += 1
+
+        md, ti, to = structure_page(raw, cfg, tlang)
+        tok_in += ti; tok_out += to
+
+        # verify (faithfulness) — on substantive text
+        if raw.strip():
+            rep = verify(page.text or "", md, min_score=cfg.faithfulness_min, target_lang=tlang)
+            worst_faith = min(worst_faith, rep.score)
+            if not rep.passed and cfg.structure_smart:
+                # escalation: full LLM pass without the smart skip
+                from tome.llm import get_llm
+                from tome.prompts import load_prompt
+                try:
+                    res = get_llm(cfg).chat(system=load_prompt("structure", TARGET_LANG=tlang),
+                                            user=raw, model=cfg.llm_structure_model,
+                                            max_tokens=cfg.llm_max_completion_tokens)
+                    md2 = res.text.strip(); tok_in += res.tokens_in; tok_out += res.tokens_out
+                    rep2 = verify(page.text or "", md2, min_score=cfg.faithfulness_min, target_lang=tlang)
+                    if rep2.score >= rep.score:
+                        md = md2; worst_faith = min(worst_faith, rep2.score)
+                except Exception as exc:
+                    log.warning("structure escalation failed: %s", exc)
+
+        # vision: classify, describe informative ones, store PNG in the store
+        is_pdf = (mime == "application/pdf") or filename.lower().endswith(".pdf")
+        for n, (token, fig) in enumerate(fig_map.items()):
+            block = "\n\n"
+            if is_pdf:
+                try:
+                    png = pdfutil.extract_figure_png(file_bytes, fig.page_number - 1, fig.bbox)
+                    if png:
+                        v = classify_and_describe(png, cfg, tlang)
+                        if v.get("informative"):
+                            key = f"figures/{doc_key}/p{fig.page_number}_{n}.png"
+                            store.put(key, png, "image/png")
+                            pending_assets.append({"kind": "figure", "object_key": key,
+                                                   "fig_class": v.get("fig_class"),
+                                                   "mime": "image/png", "sha": sha256(png)})
+                            desc = v.get("description", "")
+                            alt = (fig.caption or desc or "figure")[:80]
+                            block = (f"\n\n![{alt}](/v1/assets/{key})\n\n"
+                                     f"> **Figure:** {desc}\n\n" if desc
+                                     else f"\n\n![{alt}](/v1/assets/{key})\n\n")
+                except Exception as exc:
+                    log.debug("vision fig fail: %s", exc)
+            md = md.replace(token, block)
+        page_mds.append(md)
+
+    full_md = clean("\n\n".join(page_mds))
+
+    # Document-level faithfulness: the final markdown against the ENTIRE raw extract.
+    # This catches losses during clean/split/assembly (not just per-page structure) and
+    # is NOT trivially 1.0 under the smart skip. The honesty boundary: completeness is
+    # guaranteed RELATIVE to what the extractor pulled out; the quality of the OCR itself
+    # is reflected by extract_confidence (if the provider reports it).
+    raw_all = "\n\n".join(raw_pages)
+    if raw_all.strip():
+        doc_rep = verify(raw_all, full_md, min_score=cfg.faithfulness_min, target_lang=tlang)
+        worst_faith = min(worst_faith, doc_rep.score)
+        if not doc_rep.passed:
+            log.warning("document below faithfulness threshold: score=%s coverage=%s missing_numbers=%s",
+                        doc_rep.score, doc_rep.coverage, doc_rep.missing_numbers[:5])
+
+    # 5. Name
+    progress("name", 0.6)
+    existing = [f["path"] for f in db.folder_tree(workspace_id)]
+    meta = derive_metadata(full_md, cfg, tlang, existing, filename)
+    language = (meta.get("language") or "").strip() or _guess_lang(full_md)
+
+    # folder placement (folder_id takes priority — exact, no name ambiguity)
+    if folder_id is not None:
+        fid = folder_id
+    elif folder_path:
+        fid = db.ensure_folder_path(workspace_id, folder_path)
+    elif auto_file and meta.get("suggested_folder_path"):
+        fid = db.ensure_folder_path(workspace_id, meta["suggested_folder_path"])
+    else:
+        fid = None
+
+    # 5.5 Reimport: skip / conflict-pending / replace (§6-bis)
+    content_hash = hashlib.sha256(full_md.encode("utf-8")).hexdigest()
+    existing = db.find_document(workspace_id, fid, filename)
+    if existing:
+        unchanged = (existing["content_hash"] == content_hash
+                     and existing["pipeline_version"] == cfg.pipeline_version)
+        if unchanged:
+            if job_id:
+                db.update_job(job_id, status="done", stage="unchanged", progress=1.0,
+                              document_id=existing["id"])
+            return existing["id"]
+        if db.manual_edit_count(existing["id"]) > 0:
+            # manual edits exist → do NOT overwrite silently: pending version + diff for confirmation
+            snap_key = f"pending/{doc_key}/{content_hash[:12]}.md"
+            try:
+                store.put(snap_key, full_md.encode("utf-8"), "text/markdown")
+            except Exception:
+                pass
+            vno = db.create_pending_version(existing["id"], snapshot_key=snap_key,
+                                            content_hash=content_hash,
+                                            pipeline_version=cfg.pipeline_version,
+                                            faith=round(worst_faith, 3))
+            if job_id:
+                db.update_job(job_id, status="done", stage="conflict_pending", progress=1.0,
+                              document_id=existing["id"],
+                              payload={"conflict": True, "pending_version": vno,
+                                       "snapshot_key": snap_key})
+            return existing["id"]
+        # no manual edits → safe to replace (delete the old one, recreate)
+        from tome.edit import delete_document as _del
+        _del(db, existing["id"])
+
+    # 6. Split
+    progress("split", 0.7)
+    sections = build_sections(full_md, max_chars=cfg.max_section_chars,
+                              min_chars=cfg.min_section_chars)
+    parts = split_parts(full_md, cfg.max_md_chars)
+
+    # 7. Index (retrieval chunks + embeddings)
+    progress("index", 0.85)
+    chunks_by_sec: dict[int, list] = {}
+    for s in sections:
+        chs = chunk_section(s.order_index, s.content,
+                            chunk_tokens=cfg.chunk_tokens, overlap=cfg.chunk_overlap)
+        if chs:
+            chunks_by_sec[s.order_index] = chs
+
+    embeddings_by_chunk = None
+    embed_model_id = ""
+    embedder = get_embedder(cfg)
+    if embedder:
+        try:
+            flat = [(soi, ch) for soi, chs in chunks_by_sec.items() for ch in chs]
+            vectors = embedder.embed([ch.text for _, ch in flat])
+            embeddings_by_chunk = {(soi, ch.ordinal): v for (soi, ch), v in zip(flat, vectors)}
+            embed_model_id = embedder.model_id
+            if vectors:
+                db.ensure_vector_index(len(vectors[0]))
+        except Exception as exc:
+            log.warning("embeddings skipped: %s", exc)
+
+    meta.update(source_filename=filename, mime_type=mime, extractor=extracted.extractor,
+                content_hash=content_hash, pipeline_version=cfg.pipeline_version,
+                faithfulness_score=round(worst_faith, 3), embed_model_id=embed_model_id)
+
+    doc_id = store_document_atomic(
+        db, workspace_id=workspace_id, folder_id=fid, meta=meta, parts=parts,
+        sections=sections, chunks_by_section=chunks_by_sec,
+        embeddings_by_chunk=embeddings_by_chunk, language=language)
+
+    # record assets (original + images) for bookkeeping/GC/serving
+    for a in pending_assets:
+        try:
+            db.insert_asset(document_id=doc_id, kind=a["kind"], object_key=a["object_key"],
+                            fig_class=a.get("fig_class"), mime=a.get("mime", ""),
+                            sha=a.get("sha", ""))
+        except Exception as exc:
+            log.debug("insert_asset fail: %s", exc)
+
+    # 8. Atlas (delta for the folder)
+    progress("atlas", 0.95)
+    if fid:
+        _refresh_atlas_node(db, workspace_id, fid, cfg, tlang)
+    _refresh_atlas_index(db, workspace_id)
+
+    if job_id:
+        import json as _json
+        db.update_job(job_id, status="done", stage="done", progress=1.0,
+                      document_id=doc_id, tokens_in=tok_in, tokens_out=tok_out,
+                      faithfulness_score=round(worst_faith, 3),
+                      payload=_json.dumps({"extract_confidence": extract_confidence,
+                                           "extractor": extracted.extractor}))
+    # event for webhooks
+    try:
+        db.emit_event(workspace_id, "document.ready",
+                      {"document_id": doc_id, "title": meta["title"],
+                       "faithfulness": round(worst_faith, 3)})
+    except Exception:
+        pass
+    return doc_id
+
+
+def _refresh_atlas_node(db: DB, ws: int, folder_id: int, cfg: Config, tlang: str):
+    tree = {f["id"]: f for f in db.folder_tree(ws)}
+    f = tree.get(folder_id)
+    if not f:
+        return
+    docs = [{"title": d["title"], "summary": d.get("summary", ""),
+             "section_count": d.get("section_count", 0)} for d in db.list_documents(folder_id)]
+    md = atlas_mod.build_folder_node(f["name"], f.get("description", ""), docs, cfg, tlang)
+    db.upsert_atlas(ws, f"folder:{folder_id}", md)
+
+
+def refresh_atlas_index(db: DB, ws: int):
+    """Full Atlas index over ALL folders (indented by nesting depth), not just the
+    top level — so that nested/empty folders are visible to the agent."""
+    tree = db.folder_tree(ws)  # sorted by path → natural hierarchy
+    md = atlas_mod.build_index([{"name": f["name"], "path": f.get("path", ""),
+                                 "description": f.get("description", ""),
+                                 "document_count": f.get("doc_count", 0)} for f in tree])
+    db.upsert_atlas(ws, "index", md)
+
+
+# backward compatibility
+_refresh_atlas_index = refresh_atlas_index
+
+
+def _guess_lang(text: str) -> str:
+    if re.search(r"[а-яА-Я]", text):
+        return "ru"
+    if re.search(r"[一-鿿]", text):
+        return "zh"
+    return "en"

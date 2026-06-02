@@ -1,0 +1,49 @@
+# ─── Secrets / environment (NEVER commit) ───
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.*
+*credentials*
+
+# ─── Runtime data / object store (may contain ingested documents) ───
+_store/
+_stage/
+sources/
+pending/
+*.sqlite
+*.db
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ─── Node / React (webui) ───
+webui/node_modules/
+webui/dist/
+node_modules/
+*.local
+*.tsbuildinfo
+
+# ─── Logs / temp ───
+*.log
+*.tmp
+tmp/
+
+# ─── OS / editors ───
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,15 @@
+You are cataloging a document for a knowledge base. The input is the first ~4000 characters
+of the document plus the file metadata. Return STRICTLY JSON:
+{
+  "title":   "human-readable document title in {TARGET_LANG}",
+  "summary": "1-2 sentences: what kind of document this is and what it is about",
+  "tags":    ["up to 8 tags: topic, type, entities"],
+  "entities":["specific names/models/units, if any"],
+  "suggested_folder_path": "Folder/Subfolder or null if unclear",
+  "language": "ru|en|de|..."
+}
+Rules: title without the file extension and clutter; folder_path short and meaningful;
+if a suitable folder already exists in the list of existing folders — use it. JSON only.
+
+Existing workspace folders (for reuse):
+{EXISTING_FOLDERS}
