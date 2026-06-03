@@ -129,6 +129,12 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   faithfulness eval).
 
 ### Fixes (resilience & performance)
+- **Content-preservation guarantee (critical).** LLM structuring could silently drop
+  most of a document — an 84-page book collapsed to ~7 pages because an over-eager model
+  summarized pages (or judged noisy scans as "noise → empty"); the pipeline only logged
+  the coverage drop and stored the fragment. Now, if a page's structured output is
+  drastically shorter than the source (< `STRUCTURE_MIN_LENGTH_RATIO`, default 0.35), the
+  **raw extracted text is kept verbatim** — no page is ever summarized away.
 - **LLM no longer freezes ingestion.** A slow/unreachable model used to stall each page
   ~100s (5× exponential-backoff retries + the SDK's own retries). Added a per-request
   `LLM_TIMEOUT` and a bounded `LLM_MAX_RETRIES` (SDK internal retries disabled).

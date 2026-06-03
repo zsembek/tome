@@ -101,6 +101,10 @@ class Config:
     # Master switch for LLM restructuring. Off → keep the extracted text as-is (no LLM
     # cost); useful for already-clean Markdown sources and for fast offline tests.
     structure_enabled: bool = field(default_factory=lambda: _b("STRUCTURE_ENABLED", True))
+    # Content-preservation guarantee: if LLM structuring returns less than this fraction
+    # of the source page length, the page is kept as RAW extracted text (never summarize
+    # away content). Guards against over-eager models / noisy-scan "noise→empty" drops.
+    structure_min_length_ratio: float = field(default_factory=lambda: _f("STRUCTURE_MIN_LENGTH_RATIO", 0.35))
     faithfulness_min: float = field(default_factory=lambda: _f("FAITHFULNESS_MIN", 0.85))
     max_md_chars: int = field(default_factory=lambda: _i("MAX_MD_CHARS", 100000))
     max_section_chars: int = field(default_factory=lambda: _i("MAX_SECTION_CHARS", 8000))

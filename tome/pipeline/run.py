@@ -97,7 +97,6 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         # verify (faithfulness) — on substantive text
         if raw.strip():
             rep = verify(page.text or "", md, min_score=cfg.faithfulness_min, target_lang=tlang)
-            worst_faith = min(worst_faith, rep.score)
             if not rep.passed and cfg.structure_smart:
                 # escalation: full LLM pass without the smart skip
                 from tome.llm import get_llm
@@ -109,9 +108,20 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                     md2 = res.text.strip(); tok_in += res.tokens_in; tok_out += res.tokens_out
                     rep2 = verify(page.text or "", md2, min_score=cfg.faithfulness_min, target_lang=tlang)
                     if rep2.score >= rep.score:
-                        md = md2; worst_faith = min(worst_faith, rep2.score)
+                        md, rep = md2, rep2
                 except Exception as exc:
                     log.warning("structure escalation failed: %s", exc)
+            # CONTENT-PRESERVATION GUARANTEE: structuring must never silently drop a page.
+            # If the output is drastically shorter than the source (over-eager summary,
+            # a noisy scan judged as "noise → empty", or a reasoning model truncating),
+            # keep the RAW extracted text verbatim — a faithful page beats a pretty fragment.
+            src_len = len((page.text or "").strip())
+            if src_len > 200 and len(md.strip()) < cfg.structure_min_length_ratio * src_len:
+                log.warning("page %d: structured output too short (%d vs %d chars) — keeping raw text",
+                            pi + 1, len(md.strip()), src_len)
+                md = raw
+                rep = verify(page.text or "", md, min_score=cfg.faithfulness_min, target_lang=tlang)
+            worst_faith = min(worst_faith, rep.score)
 
         # vision: classify, describe informative ones, store PNG in the store
         is_pdf = (mime == "application/pdf") or filename.lower().endswith(".pdf")
