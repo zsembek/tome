@@ -978,45 +978,23 @@ def _start_worker():
 
 def _worker_loop():
     import time
+
+    from tome.worker import process_outbox, run_once
     db = get_db()
     cfg = get_config()
-    db.requeue_stale_jobs(cfg.job_stale_minutes)   # requeue dead jobs from a previous process
+    lease = getattr(cfg, "job_lease_seconds", 90)
+    # recover jobs orphaned by a previous process (e.g. a server rebuild/restart) — they
+    # resume from the last per-page checkpoint; run_once() heartbeats live jobs.
+    db.reclaim_orphaned_jobs(lease)
     last_sweep = time.monotonic()
     while True:
-        jid = None
         try:
-            job = db.next_queued_job()
-            if not job:
-                if time.monotonic() - last_sweep > 60:
-                    db.requeue_stale_jobs(cfg.job_stale_minutes); last_sweep = time.monotonic()
+            did = run_once(db)
+            out = process_outbox(db)
+            if time.monotonic() - last_sweep > max(10, lease // 3):
+                db.reclaim_orphaned_jobs(lease); last_sweep = time.monotonic()
+            if not did and not out:
                 time.sleep(2)
-                continue
-            jid = job["id"]
-            binp = _STAGE / f"{jid}.bin"
-            metap = _STAGE / f"{jid}.meta"
-            if not binp.exists():
-                db.update_job(jid, status="error", error="staged file missing")
-                db.clear_page_results(jid)
-                continue
-            try:
-                data = binp.read_bytes()
-                fn, mime, folder, autof, fid = (
-                    metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0", ""])[:5]
-                ingest(db, workspace_id=current_workspace(), file_bytes=data,
-                       filename=fn, mime=mime, folder_path=(folder or None),
-                       folder_id=(int(fid) if fid.strip() else None),
-                       auto_file=(autof == "1"), job_id=jid)
-                binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)   # success → cleanup
-            except Exception as exc:
-                # bounded retry that RESUMES from the last completed page (checkpoints + bytes kept)
-                log.exception("worker error on job %s: %s", jid, exc)
-                attempts = db.bump_job_attempts(jid)
-                if attempts >= 3:
-                    db.update_job(jid, status="error", error=f"failed after {attempts} attempts: {exc}"[:2000])
-                    db.clear_page_results(jid)
-                    binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)
-                else:
-                    db.update_job(jid, status="queued", stage="retry", error=f"retry {attempts}: {exc}"[:2000])
         except Exception as exc:
             log.exception("worker loop error: %s", exc)
             time.sleep(2)

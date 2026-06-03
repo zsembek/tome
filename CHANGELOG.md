@@ -6,6 +6,17 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Crash-proof ingestion (server rebuild/restart safe)
+- Ingestion now survives a worker being killed mid-import (e.g. `docker compose up
+  --build`). A **heartbeat lease** replaces the old 30-minute stale timeout: a live worker
+  touches its running job every `JOB_HEARTBEAT_SECONDS` (15s); any job whose heartbeat is
+  older than `JOB_LEASE_SECONDS` (90s) is treated as orphaned, requeued, and **resumed from
+  its last completed page** — never stuck for 30 minutes, never silently broken.
+- Workers reclaim orphaned jobs at startup and sweep every ~lease/3 seconds; the heartbeat
+  runs on a background timer so even a slow page keeps the lease fresh (no double-processing).
+- The in-process worker (dev) and the standalone worker now share one code path
+  (`tome.worker.run_once`), so both get identical heartbeat + resume behavior.
+
 ### Admin & Memory overhaul
 - **Memory UI is fully functional**: a "New memory" composer (Markdown body + tier +
   shared/agent scope) writes via `POST /v1/memory`; browse-by-tier, recall search,

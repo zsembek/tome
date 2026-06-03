@@ -120,6 +120,12 @@ class Config:
     api_key: str = field(default_factory=lambda: os.environ.get("TOME_API_KEY", ""))
     run_inprocess_worker: bool = field(default_factory=lambda: _b("RUN_INPROCESS_WORKER", True))
     job_stale_minutes: int = field(default_factory=lambda: _i("JOB_STALE_MINUTES", 30))
+    # Heartbeat lease for crash/restart recovery. A worker touches its running job every
+    # JOB_HEARTBEAT_SECONDS; a job whose heartbeat is older than JOB_LEASE_SECONDS is
+    # presumed orphaned (worker killed by a rebuild) and requeued to resume from its last
+    # per-page checkpoint. The lease MUST exceed the heartbeat interval comfortably.
+    job_lease_seconds: int = field(default_factory=lambda: _i("JOB_LEASE_SECONDS", 90))
+    job_heartbeat_seconds: int = field(default_factory=lambda: _i("JOB_HEARTBEAT_SECONDS", 15))
     # ── Identity (secure-by-default) ──
     # tome_open=true → open mode (no authentication); OTHERWISE a session/key is required.
     tome_open: bool = field(default_factory=lambda: _b("TOME_OPEN", False))

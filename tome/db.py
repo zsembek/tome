@@ -728,16 +728,33 @@ class DB:
             row = cur.fetchone()
             return row["attempts"] if row else 0
 
-    def requeue_stale_jobs(self, minutes: int = 30) -> int:
-        """Jobs in 'running' for longer than N minutes (worker crashed/hung) → back to 'queued'.
-        Without this, dead imports hang forever. Returns the number requeued."""
+    def touch_job(self, job_id: int) -> None:
+        """Heartbeat: refresh a running job's lease so the reclaimer leaves it alone.
+        The worker calls this on a timer while ingest() runs, so liveness is decoupled
+        from per-page progress — even a slow page keeps the lease fresh."""
+        if not job_id:
+            return
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("UPDATE ingestion_jobs SET updated_at=NOW() "
+                        "WHERE id=%s AND status='running'", (job_id,))
+
+    def reclaim_orphaned_jobs(self, lease_seconds: int = 90) -> int:
+        """Jobs 'running' with a heartbeat older than the lease → back to 'queued'.
+        A worker killed mid-import (server rebuild/restart) stops heartbeating, so its
+        job is reclaimed within `lease_seconds` and resumes from the last per-page
+        checkpoint. Live jobs heartbeat every few seconds and are never stolen.
+        Returns the number reclaimed."""
         with self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute("""UPDATE ingestion_jobs
-                           SET status='queued', stage='', updated_at=NOW()
+                           SET status='queued', stage='recover', updated_at=NOW()
                            WHERE status='running'
-                             AND updated_at < NOW() - (%s || ' minutes')::interval
-                           RETURNING id""", (str(minutes),))
+                             AND updated_at < NOW() - (%s || ' seconds')::interval
+                           RETURNING id""", (str(int(lease_seconds)),))
             return len(cur.fetchall())
+
+    # kept for backward compatibility; expressed in terms of the lease reclaimer
+    def requeue_stale_jobs(self, minutes: int = 30) -> int:
+        return self.reclaim_orphaned_jobs(lease_seconds=int(minutes) * 60)
 
 
 class ConflictError(Exception):

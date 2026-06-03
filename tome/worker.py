@@ -3,6 +3,7 @@ Can be scaled with separate containers. Uses a shared staging volume."""
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -57,6 +58,35 @@ def process_outbox(db: DB) -> int:
 MAX_ATTEMPTS = 3   # bounded retry budget; each retry resumes from the last good page
 
 
+class _Heartbeat:
+    """Background timer that keeps a running job's lease fresh while ingest() works.
+    Decouples liveness from per-page progress, so a slow page never looks 'dead' — yet a
+    worker killed by a rebuild stops heartbeating and the job is reclaimed within a lease."""
+
+    def __init__(self, db: DB, job_id: int, interval: int):
+        self._db, self._jid = db, job_id
+        self._interval = max(2, int(interval))
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        # touch immediately, then on the interval until stopped
+        while not self._stop.is_set():
+            try:
+                self._db.touch_job(self._jid)
+            except Exception as exc:  # never let a heartbeat error kill ingestion
+                log.warning("heartbeat for job %s failed: %s", self._jid, exc)
+            self._stop.wait(self._interval)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
 def run_once(db: DB) -> bool:
     job = db.next_queued_job()
     if not job:
@@ -67,14 +97,16 @@ def run_once(db: DB) -> bool:
         db.update_job(jid, status="error", error="staged file missing")
         db.clear_page_results(jid)
         return True
+    hb_interval = getattr(get_config(), "job_heartbeat_seconds", 15)
     try:
         data = binp.read_bytes()
         fn, mime, folder, autof, fid = (
             metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0", ""])[:5]
         ws = db.default_workspace()
-        ingest(db, workspace_id=ws, file_bytes=data, filename=fn, mime=mime,
-               folder_path=(folder or None), folder_id=(int(fid) if fid.strip() else None),
-               auto_file=(autof == "1"), job_id=jid)
+        with _Heartbeat(db, jid, hb_interval):
+            ingest(db, workspace_id=ws, file_bytes=data, filename=fn, mime=mime,
+                   folder_path=(folder or None), folder_id=(int(fid) if fid.strip() else None),
+                   auto_file=(autof == "1"), job_id=jid)
     except Exception as exc:
         log.exception("job %s failed", jid)
         attempts = db.bump_job_attempts(jid)
@@ -98,18 +130,21 @@ def main():
     db = DB(cfg)
     if not db.schema_ready():
         db.init_schema()
-    # at startup, recover "dead" jobs from a previously crashed worker
-    requeued = db.requeue_stale_jobs(cfg.job_stale_minutes)
-    if requeued:
-        log.info("requeued stale jobs: %d", requeued)
-    log.info("worker started (concurrency via N containers)")
+    lease = getattr(cfg, "job_lease_seconds", 90)
+    # At startup, immediately reclaim jobs orphaned by a previously killed worker
+    # (e.g. a `docker compose up --build`). They resume from the last per-page checkpoint.
+    reclaimed = db.reclaim_orphaned_jobs(lease)
+    if reclaimed:
+        log.info("reclaimed orphaned jobs at startup: %d", reclaimed)
+    log.info("worker started (lease=%ss, heartbeat=%ss)", lease,
+             getattr(cfg, "job_heartbeat_seconds", 15))
     last_sweep = time.monotonic()
     while True:
         did = run_once(db)
         out = process_outbox(db)
-        # periodically (once a minute) requeue stale jobs
-        if time.monotonic() - last_sweep > 60:
-            db.requeue_stale_jobs(cfg.job_stale_minutes)
+        # sweep often so a crashed worker's job is picked back up within ~a lease
+        if time.monotonic() - last_sweep > max(10, lease // 3):
+            db.reclaim_orphaned_jobs(lease)
             last_sweep = time.monotonic()
         if not did and not out:
             time.sleep(2)
