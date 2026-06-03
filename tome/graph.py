@@ -1,7 +1,7 @@
-"""Knowledge graph — a DERIVED index over the Markdown knowledge base.
+"""Knowledge graph \u2014 a DERIVED index over the Markdown knowledge base.
 
 Entities (key noun phrases, model codes, acronyms) and their co-occurrence relations
-are extracted deterministically from section text — no LLM required, no graph DB. The
+are extracted deterministically from section text \u2014 no LLM required, no graph DB. The
 graph is a third retrieval signal fused into hybrid search alongside BM25 + vectors, and
 it is fully rebuildable from the documents at any time (`tome graph-rebuild`).
 """
@@ -18,22 +18,22 @@ log = logging.getLogger(__name__)
 # multi-word Capitalized phrase (Latin or Cyrillic), e.g. "Centrifugal Pump", "Atlas Index".
 # The separator is spaces/tabs only (NOT \s) so a phrase never spans line breaks and
 # absorbs the next paragraph's sentence-initial word.
-_PHRASE = re.compile(r"[A-ZА-ЯЁ][\wА-Яа-яёЁ\-]*(?:[ \t]+[A-ZА-ЯЁ][\wА-Яа-яёЁ\-]*)+")
-_TOKEN = re.compile(r"[A-Za-zА-Яа-яёЁ0-9][A-Za-zА-Яа-яёЁ0-9\-]*")
+_PHRASE = re.compile(r"[A-Z\u0410-\u042f\u0401][\w\u0410-\u042f\u0430-\u044f\u0451\u0401\-]*(?:[ \t]+[A-Z\u0410-\u042f\u0401][\w\u0410-\u042f\u0430-\u044f\u0451\u0401\-]*)+")
+_TOKEN = re.compile(r"[A-Za-z\u0410-\u042f\u0430-\u044f\u0451\u04010-9][A-Za-z\u0410-\u042f\u0430-\u044f\u0451\u04010-9\-]*")
 _STOP = {
     "the", "and", "for", "with", "this", "that", "from", "into", "are", "was", "were",
-    "его", "это", "как", "для", "что", "при", "или", "the ", "see", "note", "fig",
+    "\u0435\u0433\u043e", "\u044d\u0442\u043e", "\u043a\u0430\u043a", "\u0434\u043b\u044f", "\u0447\u0442\u043e", "\u043f\u0440\u0438", "\u0438\u043b\u0438", "the ", "see", "note", "fig",
 }
 
 
 def extract_entities(text: str, *, min_len: int = 3, max_n: int = 30) -> list[tuple[str, str]]:
-    """Deterministically extract (name, kind) entities from text. kind ∈
+    """Deterministically extract (name, kind) entities from text. kind \u2208
     concept|code|acronym. Single sentence-initial words are intentionally ignored
     (too noisy); we keep multi-word phrases, alphanumeric codes, and acronyms."""
     out: dict[str, tuple[str, str]] = {}
 
     def add(raw: str, kind: str, floor: int):
-        name = re.sub(r"\s+", " ", raw).strip(" -·•\t")
+        name = re.sub(r"\s+", " ", raw).strip(" -\u00b7\u2022\t")
         norm = name.lower()
         if len(norm) < floor or norm in _STOP or norm.isdigit():
             return
@@ -52,11 +52,11 @@ def extract_entities(text: str, *, min_len: int = 3, max_n: int = 30) -> list[tu
     return list(out.values())[:max_n]
 
 
-# ─────────────────────────── build ───────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 build \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 def build_graph_for_document(db: DB, ws: int, doc_id: int) -> dict:
     """Extract entities + co-occurrence edges for one document's sections.
     Idempotent: clears this document's mentions first. Never raises (graph is an
-    enhancement) — logs and returns counts."""
+    enhancement) \u2014 logs and returns counts."""
     cfg = get_config()
     ents_added = edges = 0
     try:
@@ -120,7 +120,7 @@ def count_entities(db: DB, ws: int) -> int:
         return cur.fetchone()["n"]
 
 
-# ─────────────────────────── read / retrieval ───────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 read / retrieval \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 def list_entities(db: DB, ws: int, query: str = "", limit: int = 50) -> list[dict]:
     with db.pool.connection() as conn, conn.cursor() as cur:
         if query.strip():

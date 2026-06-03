@@ -1,4 +1,4 @@
-"""Language detection for extraction — pick the RIGHT OCR languages per document.
+"""Language detection for extraction \u2014 pick the RIGHT OCR languages per document.
 
 A scanned document in (say) German OCR'd with an `eng+rus` engine config comes out
 garbled. Tome runs a primary language analysis on a text sample (LLM when available,
@@ -14,7 +14,7 @@ import re
 
 log = logging.getLogger(__name__)
 
-# ISO 639-1 → Tesseract (used by Tika/OCR). Extend freely.
+# ISO 639-1 \u2192 Tesseract (used by Tika/OCR). Extend freely.
 _ISO_TO_TESS = {
     "en": "eng", "ru": "rus", "de": "deu", "fr": "fra", "es": "spa", "it": "ita",
     "pt": "por", "nl": "nld", "pl": "pol", "uk": "ukr", "tr": "tur", "cs": "ces",
@@ -32,11 +32,11 @@ _ISO_TO_FTS = {
 
 # Tiny stop-word sets to disambiguate Latin-script languages without a heavy dependency.
 _LATIN_HINTS = {
-    "de": {"der", "die", "und", "das", "mit", "nicht", "ist", "ein", "für", "auch"},
+    "de": {"der", "die", "und", "das", "mit", "nicht", "ist", "ein", "f\u00fcr", "auch"},
     "fr": {"le", "la", "les", "et", "des", "une", "pour", "dans", "est", "avec"},
     "es": {"el", "la", "los", "las", "und", "que", "para", "con", "una", "por"},
     "it": {"il", "la", "che", "di", "per", "con", "una", "sono", "anche", "nel"},
-    "pt": {"o", "a", "os", "que", "para", "com", "uma", "não", "dos", "uma"},
+    "pt": {"o", "a", "os", "que", "para", "com", "uma", "n\u00e3o", "dos", "uma"},
     "en": {"the", "and", "of", "to", "in", "is", "for", "with", "that", "this"},
 }
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
@@ -146,9 +146,9 @@ def _script_counts(text: str) -> dict[str, int]:
 
 def _cyrillic_lang(text: str) -> str:
     words = {w.lower() for w in _WORD.findall(text)}
-    if {"ї", "є", "ґ"} & set("".join(words)):
+    if {"\u0457", "\u0454", "\u0491"} & set("".join(words)):
         return "uk"
-    if words & {"және", "бұл", "үшін"}:
+    if words & {"\u0436\u04d9\u043d\u0435", "\u0431\u04b1\u043b", "\u04af\u0448\u0456\u043d"}:
         return "kk"
     return "ru"
 
@@ -167,7 +167,7 @@ def _latin_lang(text: str) -> str:
 
 
 def to_ocr_langs(iso_codes: list[str]) -> str:
-    """Map ISO 639-1 codes → a Tesseract language string like 'eng+deu'."""
+    """Map ISO 639-1 codes \u2192 a Tesseract language string like 'eng+deu'."""
     tess = [_ISO_TO_TESS[c] for c in iso_codes if c in _ISO_TO_TESS]
     seen, out = set(), []
     for t in tess:

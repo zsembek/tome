@@ -43,10 +43,16 @@ def _read(p: Path) -> str:
         return ""
 
 
+# Tests legitimately contain example secret SHAPES (dummy keys) to exercise the
+# redaction feature — exempt them. Shipped code/config/docs are still fully scanned.
+SECRET_SCAN_SKIP = ("tests/",)
+
+
 def test_no_secrets_in_tracked_files():
     offenders = []
     for p in _tracked_files():
-        if not _is_text(p):
+        rel = str(p.relative_to(ROOT)).replace("\\", "/")
+        if not _is_text(p) or rel.startswith(SECRET_SCAN_SKIP):
             continue
         txt = _read(p)
         for pat in SECRET_PATTERNS:
