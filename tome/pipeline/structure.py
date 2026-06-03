@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 _FIGURE_RE = re.compile(r"\[\[FIGURE_\d+\]\]")
 # Signs of "noise": long runs glued together without spaces, lots of single line breaks,
 # alphabets mixed within a single word, etc.
-_NOISE_HINT = re.compile(r"[A-Za-zА-Яа-я]{2,}[0-9]{2,}|[-￿]")
+_NOISE_HINT = re.compile(r"[A-Za-z\u0410-\u042f\u0430-\u044f]{2,}[0-9]{2,}|[-\uffff]")
 
 
 def looks_clean(text: str) -> bool:

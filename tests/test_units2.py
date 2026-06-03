@@ -2,7 +2,11 @@
 import sys, io, zipfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+pytestmark = pytest.mark.unit
 
 
 # ── extractor registry: all top-10 are registered and importable ──

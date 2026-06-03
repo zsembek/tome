@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import (Body, Depends, FastAPI, File, Form, Header, HTTPException,
@@ -24,13 +25,12 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("tome.api")
 
-app = FastAPI(title="Tome", version="0.1.0",
-              description="Agent-native knowledge OS — REST API")
 _STATIC = Path(__file__).resolve().parent / "static"
 
 
-@app.on_event("startup")
-def _startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── startup ──
     db = init_db()
     cfg = get_config()
     # seed the first admin from env (only if there are no users yet)
@@ -59,6 +59,14 @@ def _startup():
             "  POST /v1/auth/bootstrap {email, password}  (or set TOME_ADMIN_EMAIL/PASSWORD in .env)")
     if cfg.run_inprocess_worker:
         _start_worker()
+    yield
+    # ── shutdown ── close the DB connection pool cleanly (no dangling threads)
+    from api.deps import close_db
+    close_db()
+
+
+app = FastAPI(title="Tome", version="0.1.0",
+              description="Agent-native knowledge OS — REST API", lifespan=lifespan)
 
 
 # ─────────────────────────── Folders ───────────────────────────
@@ -196,6 +204,13 @@ def search(q: str, mode: str = "hybrid", top_k: int = Query(10, ge=1, le=50)):
 @app.get("/v1/atlas", dependencies=[Depends(require_auth)])
 def get_atlas(scope: str = "index"):
     return {"scope": scope, "markdown": get_db().get_atlas(current_workspace(), scope)}
+
+
+@app.get("/v1/extractors", dependencies=[Depends(require_auth)])
+def list_extractors_ep():
+    """Catalog of pluggable extractors with verified/experimental status + pip extra."""
+    from tome.extract.registry import list_extractors
+    return {"extractors": list_extractors()}
 
 
 @app.get("/v1/documents/{doc_id}/section_by_heading", dependencies=[Depends(require_auth)])
@@ -576,7 +591,9 @@ def root():
     idx = _STATIC / "index.html"
     if idx.exists():
         return FileResponse(str(idx))
-    return JSONResponse({"service": "tome", "docs": "/docs", "ui": "/ui"})
+    # The Library UI runs as a separate service (webui, default :3000); the gateway
+    # itself only serves the API. Advertise the docs, not an unmounted /ui path.
+    return JSONResponse({"service": "tome", "docs": "/docs", "openapi": "/openapi.json"})
 
 
 # ─────────────────────────── Worker (in-process) ───────────────

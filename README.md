@@ -1,9 +1,15 @@
 # Tome — an agent-native knowledge OS
 
+[![CI](https://github.com/zsembek/tome/actions/workflows/ci.yml/badge.svg)](https://github.com/zsembek/tome/actions/workflows/ci.yml)
+
 **Tome turns messy documents (PDFs, scans, DOCX) into a clean, structured,
 *verifiable* Markdown knowledge base that LLMs and AI agents can actually read —
 and that humans and agents can keep editing.** Self-hosted, open-source, any LLM,
 any embedder, no vector-store lock-in. One Postgres is the whole backbone.
+
+**Structure-first, RAG-optional:** agents navigate a folder → document → section
+hierarchy (and the Atlas), not opaque vector top-k. Everything — documents, the
+Atlas, agent memory — is **Markdown**; vectors are an optional enhancement on top.
 
 ```
 extract → structure (LLM) → verify faithfulness → sections + retrieval chunks
@@ -114,7 +120,9 @@ consistency.
 - **Pluggable extraction** (`tome/extract/`): top-10 — Tika, Docling, Marker,
   Azure DI, AWS Textract, Google DocAI, Mistral OCR, Unstructured, LlamaParse,
   vision-LLM (+ passthrough for md/txt/html). Routing: primary → fallback for
-  scanned/poor pages.
+  scanned/poor pages. Docling is the recommended path for complex docs (faithful
+  GFM tables + reading order). Each adapter is labeled **verified** vs.
+  **experimental** — see `GET /v1/extractors`; install only the extras you use.
 - **Pluggable LLM** (`tome/llm/`): OpenAI / Azure OpenAI / Anthropic / xAI /
   Ollama / vLLM. Separate models for structuring / vision / naming / atlas.
 - **Pluggable embedder** (`tome/embed/`): OpenAI-compatible + local BGE/e5.
@@ -182,6 +190,18 @@ EXTRACT_PRIMARY=tika
 TOME_OPEN=true                        # personal localhost mode, no sign-in
 ```
 Data never leaves your perimeter; a knowledge base for a personal LLM agent over MCP.
+
+### Fully local / air-gapped (zero cloud keys)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+```
+This overlay needs **no cloud keys**: Tika extraction + a local embedder + (optional)
+Ollama for structuring. It defaults to the **`hash`** embedder (deterministic,
+zero-download lexical semantics — works with the stock image). For real semantic
+embeddings, rebuild with the `fastembed` extra and set `EMBED_PROVIDER=fastembed`;
+for structuring, run Ollama and `ollama pull` a model (otherwise structuring falls
+back to raw text). Hybrid search works either way (BM25 + vectors → RRF).
 
 ## Configuration
 

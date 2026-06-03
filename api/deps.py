@@ -34,6 +34,16 @@ def get_db() -> DB:
     return _db
 
 
+def close_db() -> None:
+    """Close the singleton DB pool (called on app shutdown to avoid leaked threads)."""
+    global _db
+    if _db is not None:
+        try:
+            _db.close()
+        finally:
+            _db = None
+
+
 def init_db() -> DB:
     db = get_db()
     if not db.schema_ready():

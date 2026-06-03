@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 
 from tome.config import get_config
-from tome.db import DB, ConflictError
+from tome.db import DB
 from tome.pipeline.split import slugify
 
 log = logging.getLogger(__name__)

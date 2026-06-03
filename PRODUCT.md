@@ -90,6 +90,31 @@ and UX, not by trapping your data.
 
 ---
 
+### Structure-first, RAG-optional
+
+Tome is deliberately **not RAG-first**. Agents reach knowledge by navigating a
+folder → document → section hierarchy and the Atlas, and by exact-term BM25 — the way a
+person reads a manual. Vector similarity is an **optional enhancement** layered on top
+(hybrid search), never the core. This avoids the classic failure modes of vector-first
+RAG (proximity hallucinations, weak on codes/terms, opaque retrieval) and keeps the
+system fully functional with zero embeddings.
+
+### Tome vs. assembling your own stack
+
+The market sells the three layers Tome unifies as **separate** products, so the usual
+"alternative" is gluing several together and maintaining the seams:
+
+| Layer | Typical point solution | In Tome |
+|---|---|---|
+| Document extraction / structuring | **Docling**, Unstructured, Azure DI, Google Document AI | built-in, pluggable, normalized to faithful **Markdown** |
+| Stateful agent memory / runtime | **Letta**, LangGraph, Mem0 | agent memory as Markdown documents, read/write over MCP |
+| Knowledge surface & retrieval | a vector DB + a custom API/UI | hierarchy + Atlas + hybrid search + REST/MCP/UI, one transactional path |
+
+A common "Tome-like" build is **Docling + Letta/LangGraph + a vector database** wired by
+hand. Tome delivers that operating model as **one self-hosted product** — with a
+faithfulness guarantee, editing/versioning, and a Markdown-canonical core — so there are
+no seams to own and nothing locks your data in.
+
 ## 3. Core capabilities
 
 ### Faithfulness — ingestion you can trust

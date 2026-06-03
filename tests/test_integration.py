@@ -10,7 +10,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("TOME_TEST_DSN")
-pytestmark = pytest.mark.skipif(not DSN, reason="TOME_TEST_DSN is not set")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not DSN, reason="TOME_TEST_DSN is not set"),
+]
 
 if DSN:
     os.environ["POSTGRES_DSN"] = DSN

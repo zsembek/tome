@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from tome.db import DB, _regconfig
+from tome.db import DB
 
 log = logging.getLogger(__name__)
 

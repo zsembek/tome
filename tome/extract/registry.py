@@ -26,7 +26,37 @@ _BUILDERS = {
 }
 
 AVAILABLE_EXTRACTORS = [k for k in _BUILDERS if k != "passthrough"]
+
+# Truth-in-advertising: which adapters are exercised here vs. implemented-but-unverified
+# against the live third-party service. "experimental" adapters work in principle but
+# have not been validated end-to-end in this repo.
+VERIFIED_EXTRACTORS = {"tika", "docling", "vision_llm", "azure_di", "passthrough"}
+EXPERIMENTAL_EXTRACTORS = {"marker", "aws_textract", "google_docai",
+                           "mistral_ocr", "unstructured", "llamaparse"}
+
+# Optional pip package each adapter needs (None = covered by core deps).
+_REQUIRES = {
+    "tika": None, "passthrough": None, "vision_llm": None,
+    "mistral_ocr": None, "unstructured": None, "llamaparse": None,
+    "docling": "docling", "marker": "marker-pdf",
+    "azure_di": "azure-ai-documentintelligence", "aws_textract": "boto3",
+    "google_docai": "google-cloud-documentai",
+}
 _cache: dict[str, object] = {}
+
+
+def extractor_status(name: str) -> str:
+    if name in VERIFIED_EXTRACTORS:
+        return "verified"
+    if name in EXPERIMENTAL_EXTRACTORS:
+        return "experimental"
+    return "unknown"
+
+
+def list_extractors() -> list[dict]:
+    """Catalog of extractors with verification status and optional pip requirement."""
+    return [{"name": n, "status": extractor_status(n), "requires": _REQUIRES.get(n)}
+            for n in _BUILDERS]
 
 
 def get_extractor(name: str, cfg: Config | None = None):

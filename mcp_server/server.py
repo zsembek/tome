@@ -13,7 +13,6 @@ from tome.config import get_config
 from tome.db import DB, ConflictError
 from tome.embed import get_embedder
 from tome.store import hybrid_search
-from tome.storage import get_store
 from tome import edit as ed
 
 log = logging.getLogger("tome.mcp")

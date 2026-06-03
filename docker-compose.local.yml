@@ -1,0 +1,42 @@
+# Fully-local / air-gapped overlay — no cloud keys required.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# Defaults here work with the stock image (no extra downloads):
+#   * extraction  : Tika (OSS)
+#   * embeddings  : "hash" (deterministic, zero-download; lexical semantics)
+#   * LLM         : Ollama (OpenAI-compatible) if you run it; otherwise structuring
+#                   gracefully falls back to raw text.
+#
+# For real semantic embeddings, rebuild the image with the fastembed extra
+#   (RUN pip install ".[fastembed]") and set EMBED_PROVIDER=fastembed below,
+# and pull a local model into Ollama (e.g. `ollama pull qwen2.5:7b`).
+
+x-local-env: &local-env
+  EMBED_ENABLED: "true"
+  EMBED_PROVIDER: "hash"            # -> "fastembed" for real semantics (needs the extra)
+  EXTRACT_PRIMARY: "tika"
+  EXTRACT_FALLBACK: ""
+  LLM_PROVIDER: "openai"            # OpenAI-compatible client pointed at local Ollama
+  OPENAI_BASE_URL: "http://ollama:11434/v1"
+  OPENAI_API_KEY: "ollama"
+  LLM_STRUCTURE_MODEL: "qwen2.5:7b"
+  LLM_NAMING_MODEL: "qwen2.5:7b"
+  LLM_VISION_MODEL: "qwen2.5:7b"
+  LLM_ATLAS_MODEL: "qwen2.5:7b"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes: [ "ollama:/root/.ollama" ]
+    expose: [ "11434" ]
+
+  gateway:
+    environment: *local-env
+  worker:
+    environment: *local-env
+  mcp:
+    environment: *local-env
+
+volumes:
+  ollama:

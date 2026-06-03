@@ -2,7 +2,6 @@
 rendering a page to PNG (for the vision-OCR fallback)."""
 from __future__ import annotations
 
-import io
 
 import fitz  # PyMuPDF
 

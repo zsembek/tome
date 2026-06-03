@@ -294,8 +294,8 @@ _refresh_atlas_index = refresh_atlas_index
 
 
 def _guess_lang(text: str) -> str:
-    if re.search(r"[а-яА-Я]", text):
+    if re.search(r"[\u0400-\u04ff]", text):    # Cyrillic block
         return "ru"
-    if re.search(r"[一-鿿]", text):
+    if re.search(r"[\u4e00-\u9fff]", text):    # CJK Unified Ideographs
         return "zh"
     return "en"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 
@@ -64,7 +64,7 @@ def build_sections(full_text: str, *, max_chars: int = 8000,
     return sections
 
 
-_DUP_NOISE = {"содержимое", "описание", "оглавление", "содержание"}
+_DUP_NOISE = {"\u043e\u0433\u043b\u0430\u0432\u043b\u0435\u043d\u0438\u0435", "\u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435", "\u0441\u043e\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435", "\u0441\u043e\u0434\u0435\u0440\u0436\u0438\u043c\u043e\u0435"}
 
 
 def _normalize(sections: list[Section], *, max_chars: int, min_chars: int) -> list[Section]:

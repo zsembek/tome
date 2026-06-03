@@ -18,9 +18,15 @@ def get_embedder(cfg: Config | None = None) -> Embedder | None:
     if provider in ("openai", "azure_openai", "vllm", "ollama", "openai_compatible", "voyage", "cohere"):
         from tome.embed.openai_compatible import OpenAICompatEmbedder
         impl = OpenAICompatEmbedder(cfg)
+    elif provider == "fastembed":
+        from tome.embed.fastembed_provider import FastEmbedEmbedder
+        impl = FastEmbedEmbedder(cfg)
     elif provider == "local":
         from tome.embed.local import LocalEmbedder
         impl = LocalEmbedder(cfg)
+    elif provider == "hash":
+        from tome.embed.hashing import HashEmbedder
+        impl = HashEmbedder(cfg)
     else:
         raise ValueError(f"Unknown EMBED_PROVIDER: {provider}")
     _cache[key] = impl

@@ -2,7 +2,11 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+pytestmark = pytest.mark.unit
 
 from tome.pipeline.clean import clean
 from tome.pipeline.split import build_sections, split_parts, slugify
