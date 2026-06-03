@@ -97,12 +97,60 @@ def extract_document(file_bytes: bytes, *, mime: str, filename: str,
         log.warning("primary extractor %s failed: %s — trying fallback", primary_name, exc)
         result = ExtractResult(pages=[], metadata={}, extractor=primary_name)
 
+    # AI language pre-analysis: detect the document's real language(s) and, if the OCR
+    # ran with the wrong languages, re-scan with the correct set. Never breaks extraction.
+    if cfg.extract_auto_lang and result.pages:
+        try:
+            result, ocr_lang = _apply_auto_language(result, primary, file_bytes, mime,
+                                                    filename, ocr_lang, cfg, is_pdf_early)
+        except Exception as exc:
+            log.debug("auto-language analysis skipped: %s", exc)
+
     # repair poor pages (PDF only — rendering is available)
     is_pdf = (mime == "application/pdf") or filename.lower().endswith(".pdf")
     fb_name = cfg.extract_scanned or cfg.extract_fallback
     if is_pdf and fb_name and (not result.pages or any(page_is_poor(p) for p in result.pages)):
         result = _repair_poor_pages(result, file_bytes, fb_name, cfg)
     return result
+
+
+def _apply_auto_language(result: ExtractResult, primary, file_bytes: bytes, mime: str,
+                         filename: str, ocr_lang: str, cfg: Config, is_pdf: bool):
+    """Detect the sample's language(s); if they aren't covered by the current OCR
+    language set, re-scan once with the corrected set and keep the better result.
+    Always records the detected primary language in result.metadata['language']."""
+    from tome.lang import detect_languages, to_ocr_langs
+    sample = ""
+    for p in result.pages:
+        sample += (p.text or "") + "\n"
+        if len(sample) >= cfg.extract_lang_sample_chars:
+            break
+    sample = sample.strip()
+    if not sample:
+        return result, ocr_lang
+    detected = detect_languages(sample, cfg=cfg)
+    if detected:
+        result.metadata["language"] = detected[0]
+    needed = set(filter(None, to_ocr_langs(detected).split("+")))
+    current = set(filter(None, ocr_lang.split("+")))
+    # only re-OCR scanned PDFs whose detected language isn't already covered
+    if is_pdf and needed and not needed <= current:
+        merged = "+".join(sorted(current | needed))
+        log.info("auto-language: detected %s — re-scanning OCR with '%s'", detected, merged)
+        re_res = (_extract_large_pdf(primary, file_bytes, mime, filename, merged, cfg)
+                  if _too_big(file_bytes, cfg)
+                  else primary.extract(file_bytes, mime=mime, filename=filename, ocr_lang=merged))
+        # keep the re-scan only if it didn't lose content
+        if re_res.pages and re_res.total_chars >= result.total_chars * 0.9:
+            re_res.metadata.setdefault("language", result.metadata.get("language", ""))
+            d2 = detect_languages("\n".join(p.text or "" for p in re_res.pages)[:cfg.extract_lang_sample_chars], cfg=cfg)
+            if d2:
+                re_res.metadata["language"] = d2[0]
+            result, ocr_lang = re_res, merged
+    for p in result.pages:
+        if not p.language:
+            p.language = result.metadata.get("language", "")
+    return result, ocr_lang
 
 
 def _too_big(pdf_bytes: bytes, cfg: Config) -> bool:

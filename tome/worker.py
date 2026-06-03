@@ -65,10 +65,12 @@ def run_once(db: DB) -> bool:
         return True
     try:
         data = binp.read_bytes()
-        fn, mime, folder, autof = (metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0"])[:4]
+        fn, mime, folder, autof, fid = (
+            metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0", ""])[:5]
         ws = db.default_workspace()
         ingest(db, workspace_id=ws, file_bytes=data, filename=fn, mime=mime,
-               folder_path=(folder or None), auto_file=(autof == "1"), job_id=jid)
+               folder_path=(folder or None), folder_id=(int(fid) if fid.strip() else None),
+               auto_file=(autof == "1"), job_id=jid)
     except Exception as exc:
         log.exception("job %s failed", jid)
         db.update_job(jid, status="error", error=str(exc)[:2000])

@@ -222,7 +222,7 @@ def merge_sections(db: DB, section_ids: list[int], author: str = "user") -> int:
 
 # ───────────────────────── document ops ─────────────────────────
 def update_document(db: DB, doc_id: int, *, title=None, tags=None, folder_path=None,
-                    workspace_id: int | None = None):
+                    folder_id=None, workspace_id: int | None = None):
     with db.pool.connection() as conn:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute("SELECT workspace_id FROM documents WHERE id=%s", (doc_id,))
@@ -235,7 +235,10 @@ def update_document(db: DB, doc_id: int, *, title=None, tags=None, folder_path=N
                 sets.append("title=%s"); vals.append(title)
             if tags is not None:
                 sets.append("tags=%s"); vals.append(tags)
-            if folder_path is not None:
+            if folder_id is not None:
+                # move by exact folder id (drag-and-drop in the UI) — takes priority
+                sets.append("folder_id=%s"); vals.append(folder_id)
+            elif folder_path is not None:
                 fid = db.ensure_folder_path(ws, folder_path)
                 sets.append("folder_id=%s"); vals.append(fid)
             if not sets:

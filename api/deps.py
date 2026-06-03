@@ -45,9 +45,11 @@ def close_db() -> None:
 
 
 def init_db() -> DB:
+    # Always apply the schema: it is fully idempotent (CREATE … IF NOT EXISTS, guarded by
+    # an advisory lock) and this auto-migrates existing databases — new tables (agent
+    # memory, knowledge graph, …) are added on the next deploy without manual steps.
     db = get_db()
-    if not db.schema_ready():
-        db.init_schema()
+    db.init_schema()
     return db
 
 
@@ -63,6 +65,16 @@ def _resolve_scopes(token: str) -> set[str]:
     scopes = _resolve_scopes_uncached(token)
     _scope_cache[token] = (now, scopes)
     return scopes
+
+
+def invalidate_scope_cache(token: str | None = None) -> None:
+    """Drop cached scope resolution so revocations take effect immediately
+    (no ≤TTL stale window). Pass a token to drop just that entry, or nothing to
+    clear the whole cache (used on role/disable/api-key changes)."""
+    if token:
+        _scope_cache.pop(token, None)
+    else:
+        _scope_cache.clear()
 
 
 def _resolve_scopes_uncached(token: str) -> set[str]:
@@ -114,6 +126,14 @@ def require_admin(authorization: str | None = Header(default=None)):
 
 def current_token(authorization: str | None = Header(default=None)) -> str:
     return _token(authorization)
+
+
+def current_agent_id(x_agent_id: str | None = Header(default=None, alias="X-Agent-Id"),
+                     agent_id: str | None = None) -> str:
+    """Resolve the agent identity for memory ops: `X-Agent-Id` header (preferred),
+    else an `agent_id` query param, else the configured default."""
+    val = (x_agent_id or agent_id or get_config().memory_default_agent or "default").strip()
+    return val or "default"
 
 
 def current_user(authorization: str | None = Header(default=None)) -> dict:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 
 import httpx
 from openai import (
@@ -19,7 +20,6 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from tome.config import Config
 from tome.llm.base import ChatResult
@@ -47,30 +47,41 @@ class OpenAICompatProvider:
     def __init__(self, cfg: Config, provider: str):
         self.cfg = cfg
         self.provider = provider
+        # client-level timeout; disable the SDK's own retries — we manage retries
+        # ourselves (bounded) so a hung endpoint can't stall ingestion for minutes.
+        timeout = max(1.0, float(getattr(cfg, "llm_timeout_sec", 60.0)))
         if provider == "azure_openai":
             self.client = AzureOpenAI(
                 azure_endpoint=cfg.azure_openai_endpoint,
                 api_key=cfg.azure_openai_key,
                 api_version=cfg.azure_openai_api_version,
+                timeout=timeout, max_retries=0,
             )
         else:
             base_url = cfg.openai_base_url or _default_base(provider)
             self.client = OpenAI(
                 api_key=cfg.openai_api_key or "sk-noauth",
                 base_url=base_url or None,
+                timeout=timeout, max_retries=0,
             )
 
+    def _retry(self, fn):
+        """Bounded retry with capped backoff (cfg.llm_max_retries extra attempts)."""
+        attempts = max(1, int(getattr(self.cfg, "llm_max_retries", 2)) + 1)
+        delay = 1.0
+        for i in range(attempts):
+            try:
+                return fn()
+            except _RETRYABLE:
+                if i >= attempts - 1:
+                    raise
+                time.sleep(min(delay, 8.0)); delay *= 2
+
     # ── chat ──
-    @retry(retry=retry_if_exception_type(_RETRYABLE),
-           stop=stop_after_attempt(5), wait=wait_exponential(multiplier=4, min=4, max=60),
-           reraise=True)
     def chat(self, *, system, user, model, max_tokens=4000, temperature=0.2, json=False) -> ChatResult:
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        return self._complete(model, msgs, max_tokens, temperature, json)
+        return self._retry(lambda: self._complete(model, msgs, max_tokens, temperature, json))
 
-    @retry(retry=retry_if_exception_type(_RETRYABLE),
-           stop=stop_after_attempt(5), wait=wait_exponential(multiplier=4, min=4, max=60),
-           reraise=True)
     def vision(self, *, system, prompt, image_bytes, image_mime, model, max_tokens=2000) -> ChatResult:
         b64 = base64.b64encode(image_bytes).decode("ascii")
         data_url = f"data:{image_mime};base64,{b64}"
@@ -81,7 +92,7 @@ class OpenAICompatProvider:
                 {"type": "image_url", "image_url": {"url": data_url}},
             ]},
         ]
-        return self._complete(model, msgs, max_tokens, 0.2, False)
+        return self._retry(lambda: self._complete(model, msgs, max_tokens, 0.2, False))
 
     def _complete(self, model, messages, max_tokens, temperature, json) -> ChatResult:
         # per-provider rate limit (from settings) — shared across all threads

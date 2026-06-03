@@ -60,7 +60,21 @@ def test_export_then_reimport_preserves_content(api_client, ingest, sample_markd
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(reason="agent memory namespace lands in Sprint 3", strict=False)
-def test_memory_namespace_is_markdown():
-    # Locked contract: agent memory will be ordinary Markdown documents in the KB.
-    raise AssertionError("agent memory not implemented until Sprint 3")
+def test_memory_namespace_is_markdown(api_client):
+    # Locked contract: agent memory is ordinary Markdown (canonical), not a
+    # proprietary object model. (Sprint 3 — agent memory landed.)
+    from api.deps import current_workspace, get_db
+    from tome import memory
+    db = get_db()
+    ws = current_workspace()
+    m = memory.remember(db, ws=ws, agent_id="a1", title="decision",
+                        content="## Decision\n\nUse **Markdown** for agent memory, 0.7 MPa.")
+    got = memory.get_memory(db, ws=ws, mem_id=m["id"])
+    assert "## Decision" in got["content"] and "**Markdown**" in got["content"]
+    with pytest.raises(Exception):
+        json.loads(got["content"])                      # markdown, not a JSON blob
+    hits = memory.recall(db, ws=ws, agent_id="a1", query="markdown decision", top_k=3)
+    assert hits and "##" in hits[0]["content"]
+    # the memory digest export is Markdown too
+    digest = memory.memory_markdown(db, ws=ws, agent_id="a1")
+    assert digest.lstrip().startswith("#")

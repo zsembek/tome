@@ -26,8 +26,23 @@ if DSN:
     os.environ.setdefault("EXTRACT_FALLBACK", "")
     os.environ.setdefault("RUN_INPROCESS_WORKER", "false")
     os.environ.setdefault("STRUCTURE_SMART", "true")
+    os.environ["STRUCTURE_ENABLED"] = "false"   # no LLM restructuring in tests (fast, offline)
     os.environ.setdefault("TOME_OPEN", "true")
-    os.environ.setdefault("OPENAI_API_KEY", "")
+    # Hard-neutralize any real LLM/cloud credentials that a local tome/.env would
+    # otherwise leak into the test process. Tests must be offline, deterministic, and
+    # free — the pipeline degrades gracefully to raw text when no LLM is reachable.
+    os.environ["LLM_PROVIDER"] = "openai"
+    os.environ["OPENAI_API_KEY"] = "test-no-network"
+    # Point at a closed local port and use a 1s timeout + no retries so any accidental
+    # LLM call fails almost immediately. The pipeline degrades gracefully to raw text —
+    # keeping the suite fast, offline and deterministic.
+    os.environ["OPENAI_BASE_URL"] = "http://127.0.0.1:9/v1"
+    os.environ["LLM_TIMEOUT"] = "1"
+    os.environ["LLM_MAX_RETRIES"] = "0"
+    for _k in ("AZURE_OPENAI_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_DI_KEY",
+               "AZURE_DI_ENDPOINT", "ANTHROPIC_API_KEY", "COHERE_API_KEY",
+               "MISTRAL_API_KEY", "LLAMAPARSE_API_KEY"):
+        os.environ[_k] = ""
 
 from tome.llm.base import ChatResult  # noqa: E402  (after sys.path setup)
 
@@ -110,6 +125,29 @@ def _drop_test_schema():
             cur.execute("DROP SCHEMA IF EXISTS tome_test CASCADE")
     finally:
         db.close()
+
+
+@pytest.fixture
+def db_fresh():
+    """A DB on a freshly-created throwaway `tome_test` schema (integration).
+
+    Use for direct repository/module tests that don't need the HTTP app."""
+    if not DSN:
+        pytest.skip("TOME_TEST_DSN is not set")
+    from tome.config import Config
+    from tome.db import DB
+    db = DB(Config())
+    with db.pool.connection() as c, c.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS tome_test CASCADE")
+    db.init_schema()
+    try:
+        yield db
+    finally:
+        try:
+            with db.pool.connection() as c, c.cursor() as cur:
+                cur.execute("DROP SCHEMA IF EXISTS tome_test CASCADE")
+        finally:
+            db.close()
 
 
 @pytest.fixture

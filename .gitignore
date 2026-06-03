@@ -7,6 +7,9 @@
 secrets.*
 *credentials*
 
+# ─── Local agent working agreement (never commit) ───
+CLAUDE.md
+
 # ─── Runtime data / object store (may contain ingested documents) ───
 _store/
 _stage/

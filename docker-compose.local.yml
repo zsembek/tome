@@ -8,13 +8,20 @@
 #   * LLM         : Ollama (OpenAI-compatible) if you run it; otherwise structuring
 #                   gracefully falls back to raw text.
 #
-# For real semantic embeddings, rebuild the image with the fastembed extra
-#   (RUN pip install ".[fastembed]") and set EMBED_PROVIDER=fastembed below,
-# and pull a local model into Ollama (e.g. `ollama pull qwen2.5:7b`).
+# This overlay bakes the fastembed extra INTO the image (TOME_EXTRAS=fastembed
+# build arg), so switching to real semantic embeddings needs no manual rebuild —
+# just set EMBED_PROVIDER=fastembed (note: fastembed downloads a small ONNX model
+# on first use). For a local LLM, pull a model into Ollama (`ollama pull qwen2.5:7b`).
+
+x-local-build: &local-build
+  build:
+    context: .
+    args:
+      TOME_EXTRAS: "fastembed"      # offline embeddings available out of the box
 
 x-local-env: &local-env
   EMBED_ENABLED: "true"
-  EMBED_PROVIDER: "hash"            # -> "fastembed" for real semantics (needs the extra)
+  EMBED_PROVIDER: "hash"            # -> "fastembed" for real semantics (now no rebuild needed)
   EXTRACT_PRIMARY: "tika"
   EXTRACT_FALLBACK: ""
   LLM_PROVIDER: "openai"            # OpenAI-compatible client pointed at local Ollama
@@ -32,10 +39,13 @@ services:
     expose: [ "11434" ]
 
   gateway:
+    <<: *local-build
     environment: *local-env
   worker:
+    <<: *local-build
     environment: *local-env
   mcp:
+    <<: *local-build
     environment: *local-env
 
 volumes:

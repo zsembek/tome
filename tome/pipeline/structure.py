@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 _FIGURE_RE = re.compile(r"\[\[FIGURE_\d+\]\]")
 # Signs of "noise": long runs glued together without spaces, lots of single line breaks,
 # alphabets mixed within a single word, etc.
-_NOISE_HINT = re.compile(r"[A-Za-z\u0410-\u042f\u0430-\u044f]{2,}[0-9]{2,}|[-\uffff]")
+_NOISE_HINT = re.compile(r"[A-Za-z\u0410-\u042f\u0430-\u044f]{3,}\d{3,}|\ufffd")
 
 
 def looks_clean(text: str) -> bool:
@@ -43,6 +43,8 @@ def structure_page(text: str, cfg: Config, target_lang: str) -> tuple[str, int, 
     """Returns (markdown, tokens_in, tokens_out)."""
     if not text.strip():
         return "", 0, 0
+    if not getattr(cfg, "structure_enabled", True):
+        return text.strip(), 0, 0  # LLM restructuring disabled — keep raw text
     if cfg.structure_smart and looks_clean(text):
         return text.strip(), 0, 0  # already clean — skip the LLM
     system = load_prompt("structure", TARGET_LANG=target_lang)

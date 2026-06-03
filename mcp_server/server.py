@@ -129,18 +129,51 @@ def create_folder(path: Annotated[str, Field(description="'A/B/C' — created ca
 
 
 @mcp.tool()
-def ingest_document(
-    content: Annotated[str, Field(description="document text/markdown")],
+def ingest_markdown(
+    content: Annotated[str, Field(description="ready GitHub-Flavored Markdown to store as-is")],
     title: str,
-    folder_path: str | None = None,
+    folder_path: Annotated[str | None, Field(description="'A/B/C' — folder tree, created on demand")] = None,
+    folder_id: int | None = None,
 ) -> dict:
-    """Ingest a document from text (the agent grows the base itself). Runs the pipeline."""
+    """Ingest READY Markdown directly — no extraction/processing. Use this when you
+    already have clean Markdown and just want it filed into the knowledge base."""
+    import dataclasses
     from tome.pipeline.run import ingest
-    data = content.encode("utf-8")
-    fn = f"{title}.md"
-    doc_id = ingest(db(), workspace_id=ws(), file_bytes=data, filename=fn,
-                    mime="text/markdown", folder_path=folder_path)
+    cfg = dataclasses.replace(get_config(), extract_primary="passthrough", extract_fallback="")
+    fn = title if title.lower().endswith((".md", ".markdown")) else f"{title}.md"
+    doc_id = ingest(db(), workspace_id=ws(), file_bytes=content.encode("utf-8"), filename=fn,
+                    mime="text/markdown", folder_path=folder_path, folder_id=folder_id,
+                    title_override=title, cfg=cfg)
     return {"document_id": doc_id, "title": title}
+
+
+# Back-compat alias (older clients called this for markdown text).
+@mcp.tool()
+def ingest_document(content: str, title: str, folder_path: str | None = None) -> dict:
+    """Deprecated alias of ingest_markdown (ready Markdown text)."""
+    return ingest_markdown(content=content, title=title, folder_path=folder_path)
+
+
+@mcp.tool()
+def ingest_file(
+    filename: Annotated[str, Field(description="original filename incl. extension, e.g. report.pdf")],
+    content_base64: Annotated[str, Field(description="base64-encoded raw file bytes")],
+    folder_path: str | None = None,
+    folder_id: int | None = None,
+) -> dict:
+    """Ingest a FILE (PDF/DOCX/image/…) — runs the full extraction → structuring →
+    faithfulness pipeline, then files it into the folder tree."""
+    import base64
+    import mimetypes
+    from tome.pipeline.run import ingest
+    try:
+        data = base64.b64decode(content_base64, validate=True)
+    except Exception:
+        return {"error": "content_base64 is not valid base64"}
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    doc_id = ingest(db(), workspace_id=ws(), file_bytes=data, filename=filename, mime=mime,
+                    folder_path=folder_path, folder_id=folder_id)
+    return {"document_id": doc_id, "filename": filename}
 
 
 @mcp.tool()
@@ -226,6 +259,126 @@ def export_document(document_id: int) -> dict:
     rows = d.get_document_parts(document_id, None)
     return {"document_id": document_id, "title": meta["title"],
             "markdown": "\n\n".join(r["content"] for r in rows)}
+
+
+# ─────────── KNOWLEDGE GRAPH ───────────
+@mcp.tool()
+def list_entities(query: str = "", limit: int = 50) -> list[dict]:
+    """List knowledge-graph entities (key concepts, model codes, acronyms) extracted
+    from the base, most-mentioned first. Optionally filter by a query substring."""
+    from tome.graph import list_entities as _le
+    return _le(db(), ws(), query, limit)
+
+
+@mcp.tool()
+def get_entity(entity_id: int) -> dict:
+    """An entity's sections (where it's mentioned) and related entities (neighbors).
+    Use it to pivot from a concept to the documents that discuss it."""
+    from tome.graph import get_entity as _ge
+    return _ge(db(), ws(), entity_id) or {"error": "entity not found"}
+
+
+# ─────────── AGENT MEMORY ───────────
+def _agent(agent_id: str | None) -> str:
+    return (agent_id or get_config().memory_default_agent or "default").strip() or "default"
+
+
+def _mem_embedding(text: str):
+    cfg = get_config()
+    if not cfg.memory_enabled:
+        return None
+    emb = get_embedder(cfg)
+    if not emb:
+        return None
+    try:
+        return emb.embed([text])[0]
+    except Exception:
+        return None
+
+
+@mcp.tool()
+def remember(content: Annotated[str, Field(description="Markdown memory to store")],
+             title: str = "", tier: str = "semantic", scope: str | None = None,
+             mkey: Annotated[str, Field(description="key to supersede a prior memory")] = "",
+             importance: float = 1.0, agent_id: str | None = None) -> dict:
+    """Store a long-term memory (Markdown). Secrets are redacted automatically.
+    Set `mkey` to overwrite an outdated fact with the same key."""
+    from tome import memory
+    row = memory.remember(db(), ws=ws(), agent_id=_agent(agent_id), content=content,
+                          title=title, tier=tier, scope=scope, mkey=mkey,
+                          importance=importance, embedding=_mem_embedding(content))
+    return {"id": row["id"], "tier": row["tier"], "scope": row["scope"]}
+
+
+@mcp.tool()
+def recall(query: str, top_k: int = 8, tier: str | None = None,
+           agent_id: str | None = None) -> list[dict]:
+    """Recall relevant memories (hybrid BM25 + vector). Call this before acting,
+    to reuse what was learned earlier."""
+    from tome import memory
+    return memory.recall(db(), ws=ws(), agent_id=_agent(agent_id), query=query,
+                         top_k=top_k, tier=tier, query_embedding=_mem_embedding(query))
+
+
+@mcp.tool()
+def list_memory(tier: str | None = None, limit: int = 100, agent_id: str | None = None) -> list[dict]:
+    """List stored memories (optionally by tier: working|episodic|semantic|procedural)."""
+    from tome import memory
+    return memory.list_memory(db(), ws=ws(), agent_id=_agent(agent_id), tier=tier, limit=limit)
+
+
+@mcp.tool()
+def observe(content: Annotated[str, Field(description="a raw observation to log")],
+            session_id: str = "", agent_id: str | None = None) -> dict:
+    """Log a raw working-tier observation (idempotent per session). Cheap to call
+    often; `consolidate` later distils these into durable memory."""
+    from tome import memory
+    row = memory.observe(db(), ws=ws(), agent_id=_agent(agent_id), content=content,
+                         session_id=session_id)
+    return {"id": row["id"], "tier": "working"}
+
+
+@mcp.tool()
+def consolidate(session_id: str = "", agent_id: str | None = None) -> dict:
+    """Distil a session's observations into one episodic summary and promote
+    durable facts to semantic memory."""
+    from tome import memory
+    cfg = get_config()
+    llm = None
+    try:
+        from tome.llm.registry import get_llm
+        llm = get_llm(cfg)
+    except Exception:
+        llm = None
+    return memory.consolidate(db(), ws=ws(), agent_id=_agent(agent_id),
+                              session_id=session_id, llm=llm, model=cfg.llm_atlas_model)
+
+
+@mcp.tool()
+def import_transcript(transcript: str, session_id: str = "", consolidate: bool = True,
+                      agent_id: str | None = None) -> dict:
+    """Import a conversation transcript (one turn per line) into memory: each line
+    becomes an observation, then the session is consolidated into durable memory."""
+    from tome import memory
+    cfg = get_config()
+    llm = None
+    if consolidate:
+        try:
+            from tome.llm.registry import get_llm
+            llm = get_llm(cfg)
+        except Exception:
+            llm = None
+    return memory.import_transcript(db(), ws=ws(), agent_id=_agent(agent_id), transcript=transcript,
+                                    session_id=session_id, consolidate_after=consolidate,
+                                    llm=llm, model=cfg.llm_atlas_model)
+
+
+@mcp.tool()
+def forget(memory_id: int, agent_id: str | None = None) -> dict:
+    """Delete a memory by id (audited)."""
+    from tome import memory
+    ok = memory.forget(db(), ws=ws(), mem_id=memory_id, author="agent")
+    return {"deleted": memory_id} if ok else {"error": "memory not found"}
 
 
 def main():

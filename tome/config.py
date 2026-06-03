@@ -54,6 +54,10 @@ class Config:
     llm_naming_model: str = field(default_factory=lambda: os.environ.get("LLM_NAMING_MODEL", "gpt-4o-mini"))
     llm_atlas_model: str = field(default_factory=lambda: os.environ.get("LLM_ATLAS_MODEL", "gpt-4o"))
     llm_max_completion_tokens: int = field(default_factory=lambda: _i("LLM_MAX_COMPLETION_TOKENS", 16000))
+    # Resilience: a slow/unreachable LLM must NOT freeze ingestion. Per-request timeout
+    # and a small retry cap (with bounded backoff) — tune down for tests/offline.
+    llm_timeout_sec: float = field(default_factory=lambda: _f("LLM_TIMEOUT", 60.0))
+    llm_max_retries: int = field(default_factory=lambda: _i("LLM_MAX_RETRIES", 2))
 
     # OpenAI-compatible (openai/azure/xai/ollama/vllm)
     openai_api_key: str = field(default_factory=lambda: os.environ.get("OPENAI_API_KEY", ""))
@@ -75,6 +79,10 @@ class Config:
     extract_scanned: str = field(default_factory=lambda: os.environ.get("EXTRACT_SCANNED", ""))
     extract_fallback: str = field(default_factory=lambda: os.environ.get("EXTRACT_FALLBACK", "vision_llm"))
     extract_ocr_lang: str = field(default_factory=lambda: os.environ.get("EXTRACT_OCR_LANG", "eng+rus"))
+    # AI language pre-analysis: detect the document's real language(s) and re-scan with
+    # the correct OCR languages (fixes garbled multi-language scans). On by default.
+    extract_auto_lang: bool = field(default_factory=lambda: _b("EXTRACT_AUTO_LANG", True))
+    extract_lang_sample_chars: int = field(default_factory=lambda: _i("EXTRACT_LANG_SAMPLE_CHARS", 4000))
     extract_max_pages: int = field(default_factory=lambda: _i("EXTRACT_MAX_PAGES", 200))
     tika_url: str = field(default_factory=lambda: os.environ.get("TIKA_URL", "http://localhost:9998"))
     azure_di_endpoint: str = field(default_factory=lambda: os.environ.get("AZURE_DI_ENDPOINT", ""))
@@ -90,6 +98,9 @@ class Config:
     # ── Limits/thresholds (all configurable) ──
     target_lang: str = field(default_factory=lambda: os.environ.get("TARGET_LANG", "auto"))
     structure_smart: bool = field(default_factory=lambda: _b("STRUCTURE_SMART", True))
+    # Master switch for LLM restructuring. Off → keep the extracted text as-is (no LLM
+    # cost); useful for already-clean Markdown sources and for fast offline tests.
+    structure_enabled: bool = field(default_factory=lambda: _b("STRUCTURE_ENABLED", True))
     faithfulness_min: float = field(default_factory=lambda: _f("FAITHFULNESS_MIN", 0.85))
     max_md_chars: int = field(default_factory=lambda: _i("MAX_MD_CHARS", 100000))
     max_section_chars: int = field(default_factory=lambda: _i("MAX_SECTION_CHARS", 8000))
@@ -112,6 +123,28 @@ class Config:
     session_ttl_hours: int = field(default_factory=lambda: _i("SESSION_TTL_HOURS", 168))
     admin_email: str = field(default_factory=lambda: os.environ.get("TOME_ADMIN_EMAIL", ""))
     admin_password: str = field(default_factory=lambda: os.environ.get("TOME_ADMIN_PASSWORD", ""))
+    # ── Agent memory (Markdown-native) ──
+    memory_enabled: bool = field(default_factory=lambda: _b("MEMORY_ENABLED", True))
+    # 'shared' → new memories visible to every agent in the workspace;
+    # 'isolated' → new memories private to the writing agent_id by default.
+    memory_scope: str = field(default_factory=lambda: os.environ.get("MEMORY_SCOPE", "shared"))
+    memory_default_agent: str = field(default_factory=lambda: os.environ.get("MEMORY_DEFAULT_AGENT", "default"))
+    memory_redact: bool = field(default_factory=lambda: _b("MEMORY_REDACT", True))
+    memory_decay_half_life_days: float = field(default_factory=lambda: _f("MEMORY_DECAY_HALF_LIFE_DAYS", 30.0))
+    memory_working_cap: int = field(default_factory=lambda: _i("MEMORY_WORKING_CAP", 500))
+    memory_min_importance: float = field(default_factory=lambda: _f("MEMORY_MIN_IMPORTANCE", 0.05))
+
+    # ── Ingestion hygiene / connectors ──
+    # Redact secrets (API keys, tokens, PEM, <private>…</private>) from document text
+    # during ingestion. Off by default (documents are usually trusted); turn on for
+    # untrusted sources or compliance.
+    ingest_redact: bool = field(default_factory=lambda: _b("INGEST_REDACT", False))
+
+    # ── Knowledge graph (derived 3rd retrieval signal) ──
+    graph_enabled: bool = field(default_factory=lambda: _b("GRAPH_ENABLED", True))
+    graph_min_entity_len: int = field(default_factory=lambda: _i("GRAPH_MIN_ENTITY_LEN", 3))
+    graph_max_entities_per_section: int = field(default_factory=lambda: _i("GRAPH_MAX_ENTITIES_PER_SECTION", 30))
+
     # ── Hardening ──
     tome_strict: bool = field(default_factory=lambda: _b("TOME_STRICT", False))
     rate_limit_per_min: int = field(default_factory=lambda: _i("RATE_LIMIT_PER_MIN", 120))

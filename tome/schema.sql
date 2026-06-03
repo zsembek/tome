@@ -245,6 +245,95 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS ix_sessions_token ON sessions (token_hash);
 CREATE INDEX IF NOT EXISTS ix_sessions_user  ON sessions (user_id);
 
+-- ── Agent memory (Markdown-native; separate from the document KB) ─────────────
+-- Long-term memory for agents. `content` is canonical Markdown — the same
+-- substrate as documents/Atlas, never a proprietary object model. Kept in its
+-- own table so it does NOT pollute the folder tree / Atlas / document search.
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id            BIGSERIAL PRIMARY KEY,
+    workspace_id  BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    agent_id      TEXT NOT NULL DEFAULT 'default',
+    scope         TEXT NOT NULL DEFAULT 'shared',     -- 'shared' (workspace) | 'agent' (private)
+    tier          TEXT NOT NULL DEFAULT 'semantic',   -- working | episodic | semantic | procedural
+    session_id    TEXT NOT NULL DEFAULT '',
+    mkey          TEXT NOT NULL DEFAULT '',           -- optional key for dedup/supersession
+    title         TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL,                       -- Markdown (canonical)
+    content_hash  TEXT NOT NULL DEFAULT '',
+    importance    REAL NOT NULL DEFAULT 1.0,
+    access_count  INT NOT NULL DEFAULT 0,
+    superseded_by BIGINT REFERENCES agent_memory(id) ON DELETE SET NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tsv           TSVECTOR
+);
+CREATE INDEX IF NOT EXISTS ix_mem_ws     ON agent_memory (workspace_id);
+CREATE INDEX IF NOT EXISTS ix_mem_agent  ON agent_memory (workspace_id, agent_id);
+CREATE INDEX IF NOT EXISTS ix_mem_tier   ON agent_memory (workspace_id, tier);
+CREATE INDEX IF NOT EXISTS ix_mem_tsv    ON agent_memory USING GIN (tsv);
+CREATE INDEX IF NOT EXISTS ix_mem_mkey   ON agent_memory (workspace_id, agent_id, mkey);
+-- pgvector column for semantic recall (added only if the extension is present;
+-- BM25 recall works without it). No fixed dim / index — memory volume is small.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vector') THEN
+        EXECUTE 'ALTER TABLE agent_memory ADD COLUMN IF NOT EXISTS embedding vector';
+    END IF;
+END $$;
+
+-- Append-only audit trail for memory deletions (provenance / compliance).
+CREATE TABLE IF NOT EXISTS memory_audit (
+    id           BIGSERIAL PRIMARY KEY,
+    workspace_id BIGINT NOT NULL,
+    memory_id    BIGINT NOT NULL,
+    agent_id     TEXT NOT NULL DEFAULT '',
+    tier         TEXT NOT NULL DEFAULT '',
+    action       TEXT NOT NULL,                        -- forget | supersede | evict
+    author       TEXT NOT NULL DEFAULT 'agent',
+    reason       TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_mem_audit_ws ON memory_audit (workspace_id, created_at);
+
+-- ── Knowledge graph (DERIVED index over Markdown — rebuildable, not a graph DB) ──
+-- Entities and their co-occurrence relations are extracted from section text and
+-- used as a third retrieval signal (alongside BM25 + vectors). Everything here can
+-- be dropped and rebuilt from the documents at any time (`tome graph-rebuild`).
+CREATE TABLE IF NOT EXISTS graph_entities (
+    id            BIGSERIAL PRIMARY KEY,
+    workspace_id  BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    norm          TEXT NOT NULL,                       -- lowercased key for dedup
+    kind          TEXT NOT NULL DEFAULT 'concept',     -- concept | code | acronym
+    mention_count INT NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (workspace_id, norm)
+);
+CREATE INDEX IF NOT EXISTS ix_gent_ws   ON graph_entities (workspace_id);
+CREATE INDEX IF NOT EXISTS ix_gent_norm ON graph_entities (workspace_id, norm);
+
+CREATE TABLE IF NOT EXISTS graph_mentions (
+    entity_id    BIGINT NOT NULL REFERENCES graph_entities(id) ON DELETE CASCADE,
+    workspace_id BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    document_id  BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    section_id   BIGINT REFERENCES sections(id) ON DELETE CASCADE,
+    PRIMARY KEY (entity_id, section_id)
+);
+CREATE INDEX IF NOT EXISTS ix_gment_ent ON graph_mentions (entity_id);
+CREATE INDEX IF NOT EXISTS ix_gment_sec ON graph_mentions (section_id);
+CREATE INDEX IF NOT EXISTS ix_gment_doc ON graph_mentions (document_id);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id           BIGSERIAL PRIMARY KEY,
+    workspace_id BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    src_id       BIGINT NOT NULL REFERENCES graph_entities(id) ON DELETE CASCADE,
+    dst_id       BIGINT NOT NULL REFERENCES graph_entities(id) ON DELETE CASCADE,
+    weight       INT NOT NULL DEFAULT 1,               -- co-occurrence count
+    UNIQUE (workspace_id, src_id, dst_id)
+);
+CREATE INDEX IF NOT EXISTS ix_gedge_src ON graph_edges (src_id);
+
 -- default workspace
 INSERT INTO workspaces (slug, name, mode)
 VALUES ('default', 'Default workspace', 'enterprise')

@@ -17,5 +17,14 @@ Include reproduction steps and impact. We aim to acknowledge reports within a fe
   Postgres/MinIO/Tika stay on the internal network. Terminate TLS at a reverse proxy.
 - **Assets** are served via short-lived signed URLs; tokens are never placed in URLs for
   authenticated calls.
+- **Immediate revocation:** logout, disabling/changing a user's role, and deleting an
+  API key invalidate the scope cache at once — a revoked principal loses access
+  immediately (no stale-cache window).
+- **Agent memory hygiene:** secrets (API keys, tokens, PEM private keys,
+  `<private>…</private>` blocks) are redacted before any memory is stored
+  (`MEMORY_REDACT=true` by default). Memory is per-agent scoped (`shared` vs `agent`),
+  and deletions are recorded in an append-only `memory_audit` trail. Avoid storing
+  end-user PII you don't intend to retain; tune decay/GC via `MEMORY_*` and
+  `tome memory-gc`.
 
 Supported version: the latest `main` / most recent release.

@@ -35,8 +35,10 @@ extract → structure (LLM) → verify faithfulness → sections + retrieval chu
 ```
 
 **Highlights:** 📄 pluggable extraction (top-10) · ✅ faithfulness guarantee ·
-🧭 hierarchical Atlas · 🔎 hybrid search (BM25 + pgvector + reranker) · ✍️ full editing
-& versioning · 🤖 read **and write** over MCP · 🔒 secure-by-default · 🏠 fully-local mode.
+🌍 **auto language detection** (right OCR languages per doc) · 🧭 hierarchical Atlas ·
+🔎 hybrid search (BM25 + pgvector + **knowledge graph** → RRF + reranker) · ✍️ full
+editing & versioning · 🧠 **agent memory** (Markdown-native, auto-capture) · 🤖 read
+**and write** over MCP · 🔒 secure-by-default · 🏠 fully-local mode.
 
 Product overview, goals & strategy: **[PRODUCT.md](PRODUCT.md)**.
 
@@ -82,9 +84,18 @@ conflict resolution, so corrections survive.
   (optimistic `rev` locking, full revision history), reorganize folders, and re-import
   updated sources with **per-section 3-way conflict resolution** (keep manual edits vs.
   take the new import). Corrections persist across re-ingests.
-- **Three first-class interfaces.** A ~50-endpoint REST API, **22 MCP tools** (read +
-  write, so agents can grow the base themselves), and a **React Library UI** with
-  roles, live ingest progress, a section editor, search, and Atlas.
+- **Built-in agent memory (Markdown-native).** Tome doubles as an agent's long-term
+  memory: `remember / recall / observe / consolidate / forget` over REST and MCP.
+  Memories are plain Markdown (no proprietary store), tiered **working → episodic →
+  semantic → procedural** with LLM consolidation, scoped per agent (shared or private),
+  secret-redacted on write, reinforced on recall, and fade via decay/GC. A drop-in
+  [auto-capture hook](examples/hooks) gives any agent memory with zero code.
+- **Three first-class interfaces.** A REST API, **30 MCP tools** (read + write + memory,
+  so agents can grow the base *and* remember across sessions — including `ingest_markdown`
+  for ready Markdown and `ingest_file` for binary files-with-processing, both into a
+  folder tree), and a polished **React Library UI** with a real folder tree (create /
+  rename / move / drag-to-file), a TOC-based document reader, a navigable Atlas map, a
+  tabbed Admin, search, and a Memory browser.
 - **A map for agents (the Atlas).** A generated, always-current overview of the whole
   base (folder tree, document counts, summaries) that an agent reads first to orient
   itself — which markedly improves multi-step retrieval.
@@ -113,6 +124,37 @@ Everything persists in PostgreSQL: folder tree, documents, sections, revisions,
 retrieval chunks, Atlas, jobs, and a transactional outbox for object-store/webhook
 consistency.
 
+## 🧠 Agent memory (Markdown-native)
+
+Tome isn't only a document KB — it's also a **persistent memory** an agent can grow
+and reuse, stored as ordinary **Markdown** (never a proprietary object model). Memory
+lives in its own namespace, so it never pollutes the document tree or Atlas, yet it's
+searched by the same hybrid (BM25 + optional vectors) machinery.
+
+- **Tiers (automatic consolidation).** `working` (raw observations) → `episodic`
+  (per-session summary) → `semantic` (durable facts) → `procedural` (how-tos).
+  `consolidate` distils a session's observations into an episodic summary and promotes
+  durable facts — via the configured LLM, or a deterministic raw roll-up offline.
+- **Hygiene built in.** Secrets (API keys, tokens, PEM blocks, `<private>…</private>`)
+  are **redacted before storage**; recall **reinforces** importance; old low-value
+  memories **decay and are evicted** (`tome memory-gc`); contradictions are resolved by
+  **supersession** (write with the same `mkey`).
+- **Per-agent scoping.** `shared` memories are workspace-wide; `agent` memories are
+  private to the writing `agent_id` (`X-Agent-Id` header / `agent_id` param). Default is
+  set by `MEMORY_SCOPE` (`shared` | `isolated`).
+- **Surfaces.** REST `POST /v1/memory`, `GET /v1/memory/recall?q=`, `/observe`,
+  `/consolidate`, `GET/DELETE /v1/memory/{id}`; MCP tools `remember · recall ·
+  list_memory · observe · consolidate · forget`; a **Memory** tab in the Library UI.
+- **Zero-code auto-capture.** Drop in the [Claude Code hook](examples/hooks) to
+  `observe` on tool use and `consolidate` at the end of a turn.
+
+```bash
+# remember a fact (redacted, Markdown), then recall it later
+curl -XPOST localhost:8080/v1/memory -H 'Content-Type: application/json' \
+  -H 'X-Agent-Id: my-agent' -d '{"content":"## Pref\n\nUser prefers metric units.","mkey":"user.units"}'
+curl 'localhost:8080/v1/memory/recall?q=units' -H 'X-Agent-Id: my-agent'
+```
+
 ## Tome vs. a traditional vector-RAG stack
 
 | | Traditional vector RAG | **Tome** |
@@ -130,7 +172,9 @@ consistency.
 - **Technical documentation & manuals** (Tome's origin: industrial-equipment manuals,
   full of scanned tables and figures) made queryable by an AI assistant.
 - **Internal knowledge bases** for support, ops, or engineering agents.
-- **Agent long-term memory** — a store an agent can both read and *write/curate* via MCP.
+- **Agent long-term memory** — first-class, Markdown-native memory (tiers, decay,
+  redaction, per-agent scoping) an agent reads and curates via MCP/REST, with drop-in
+  auto-capture.
 - **Regulated / air-gapped environments** that need everything self-hosted, with no data
   leaving the network and no third-party vector service.
 
@@ -161,7 +205,17 @@ consistency.
   service API keys; assets via short-lived signed URLs; non-root containers.
 - **REST API** (`api/`, FastAPI) + **MCP** (`mcp_server/`) + **Library UI**
   (`webui/`, React + Vite).
-- **CLI** (`tome/cli.py`): `tome init-db | ingest | status | eval | gc | dedup | reindex`.
+- **Agent memory** (`tome/memory.py`): Markdown-native, tiered (working/episodic/
+  semantic/procedural), per-agent scoping, secret redaction, decay/GC, supersession —
+  over REST + MCP, with a drop-in auto-capture hook (`examples/hooks/`).
+- **Knowledge graph** (`tome/graph.py`): entities + co-occurrence relations derived
+  deterministically from Markdown (no graph DB), fused into hybrid search as a third
+  signal; browse it in the UI or over MCP (`list_entities`/`get_entity`).
+- **Multilingual OCR** (`tome/lang.py`): AI language pre-analysis detects each document's
+  real language(s) and re-scans with the correct OCR engine languages — no more garbled
+  mixed-language scans.
+- **CLI** (`tome/cli.py`): `tome init-db | ingest | status | eval | gc | dedup |
+  reindex | memory-gc | graph-rebuild | demo-seed | export-all`.
 
 ## Quick start (Docker)
 
@@ -219,10 +273,12 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 ```
 This overlay needs **no cloud keys**: Tika extraction + a local embedder + (optional)
 Ollama for structuring. It defaults to the **`hash`** embedder (deterministic,
-zero-download lexical semantics — works with the stock image). For real semantic
-embeddings, rebuild with the `fastembed` extra and set `EMBED_PROVIDER=fastembed`;
-for structuring, run Ollama and `ollama pull` a model (otherwise structuring falls
-back to raw text). Hybrid search works either way (BM25 + vectors → RRF).
+zero-download lexical semantics). The overlay **bakes the `fastembed` extra into the
+image** (via the `TOME_EXTRAS=fastembed` build arg), so switching to real semantic
+embeddings needs **no manual rebuild** — just set `EMBED_PROVIDER=fastembed`
+(fastembed downloads a small ONNX model on first use). For structuring, run Ollama and
+`ollama pull` a model (otherwise structuring falls back to raw text). Hybrid search
+works either way (BM25 + vectors → RRF).
 
 ## Configuration
 

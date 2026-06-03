@@ -94,8 +94,18 @@ def hybrid_search(db: DB, *, workspace_id: int, query: str, query_embedding: lis
     """BM25 (tsv) + ANN (pgvector) → RRF fusion. Without an embedding — BM25 only."""
     bm25 = _bm25(db, workspace_id, query, top_k * 3) if mode in ("hybrid", "bm25") else []
     ann = _ann(db, workspace_id, query_embedding, top_k * 3) if (mode in ("hybrid", "vector") and query_embedding) else []
+    # third signal: knowledge-graph entity co-occurrence (derived from Markdown)
+    graph = []
+    if mode in ("hybrid", "graph"):
+        try:
+            from tome.config import get_config as _gc
+            if _gc().graph_enabled:
+                from tome.graph import graph_stream
+                graph = graph_stream(db, workspace_id, query, top_k * 3)
+        except Exception as exc:
+            log.debug("graph stream skipped: %s", exc)
     # for the reranker we take more candidates, then trim to top_k
-    fused = _rrf(bm25, ann, top_k * 3)
+    fused = _rrf_multi([bm25, ann, graph], top_k * 3)
     if not fused:
         return []
     ids = [sid for sid, _ in fused]
@@ -156,10 +166,14 @@ def _ann(db, ws, qemb, limit):
             return []
 
 
-def _rrf(a, b, top_k, k=60):
+def _rrf_multi(lists, top_k, k=60):
+    """Reciprocal-rank fusion over any number of ranked (id, score) lists."""
     scores: dict[int, float] = {}
-    for lst in (a, b):
+    for lst in lists:
         for rank, (sid, _) in enumerate(lst):
             scores[sid] = scores.get(sid, 0.0) + 1.0 / (k + rank + 1)
-    ranked = sorted(scores.items(), key=lambda x: -x[1])[:top_k]
-    return ranked
+    return sorted(scores.items(), key=lambda x: -x[1])[:top_k]
+
+
+def _rrf(a, b, top_k, k=60):
+    return _rrf_multi([a, b], top_k, k)

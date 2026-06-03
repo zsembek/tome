@@ -145,6 +145,40 @@ class DB:
                 parent_id = cur.fetchone()["id"]
         return parent_id
 
+    def create_subfolder(self, ws: int, parent_id: int | None, name: str) -> int:
+        """Create a single child folder under `parent_id` (or a root if None) by
+        display name. Computes a unique ltree path. Returns the new folder id."""
+        from tome.pipeline.split import slugify
+        slug = slugify(name).replace("-", "_") or "f"
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            if parent_id:
+                cur.execute("SELECT path::text FROM folders WHERE id=%s AND workspace_id=%s",
+                            (parent_id, ws))
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError("parent folder not found")
+                base = f"{row['path']}.{slug}"
+            else:
+                base = slug
+            lpath, i = base, 2
+            while True:
+                cur.execute("SELECT 1 FROM folders WHERE workspace_id=%s AND path=%s::ltree",
+                            (ws, lpath))
+                if not cur.fetchone():
+                    break
+                lpath = f"{base}{i}"; i += 1
+            cur.execute("""INSERT INTO folders (workspace_id, parent_id, path, slug, name)
+                           VALUES (%s,%s,%s::ltree,%s,%s) RETURNING id""",
+                        (ws, parent_id, lpath, lpath.split(".")[-1], name))
+            return cur.fetchone()["id"]
+
+    def list_all_documents(self, ws: int) -> list[dict]:
+        """All documents (id, title, folder_id) in a workspace — for the Atlas tree."""
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT id, title, folder_id, status FROM documents
+                           WHERE workspace_id=%s ORDER BY title""", (ws,))
+            return list(cur.fetchall())
+
     def folder_tree(self, ws: int) -> list[dict]:
         with self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute("""SELECT f.id, f.parent_id, f.path::text path, f.name, f.description,

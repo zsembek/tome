@@ -187,12 +187,29 @@ merge — atomically, with optimistic locking and a full revision history. Re-im
 updated source detects conflicts with manual edits and offers **per-section resolution**
 (keep the manual edit vs. take the new import); nothing is silently lost.
 
+### Agent memory (Markdown-native)
+Tome is also a **long-term memory** for agents — stored as the same canonical Markdown,
+in its own namespace so it never pollutes the document KB, yet searchable by the same
+hybrid retrieval. Memory is **tiered** (working → episodic → semantic → procedural) with
+LLM consolidation that distils a session's raw observations into a durable summary and
+promotes key facts. It is **scoped per agent** (shared workspace memory vs. private),
+**secret-redacted** before storage, **reinforced** when recalled, and **fades** through
+importance decay and GC; contradictions are resolved by supersession. Agents use it via
+`remember / recall / observe / consolidate / forget` over MCP or REST, and a drop-in
+auto-capture hook gives any agent memory with zero code.
+
 ### Three access surfaces
-- **REST API** — for services, pipelines, and integrations.
-- **MCP** — read *and* write tools so AI agents can both consume and grow the base
-  (Claude Desktop, Cursor, or any MCP client; stdio and HTTP/OpenAPI).
-- **Library UI** — a full web application for people: folder tree, drag-and-drop upload
-  with live progress, viewer, section editor, search, the Atlas, and version history.
+- **REST API** — for services, pipelines, and integrations; ingest ready Markdown
+  (`/v1/documents/markdown`) or files into a folder tree, and read the structure back as
+  a navigable Atlas tree.
+- **MCP** — read *and* write tools (incl. memory) so AI agents can both consume and grow
+  the base and remember across sessions; agents file knowledge into a folder tree via
+  `ingest_markdown` (ready Markdown) or `ingest_file` (files-with-processing). Works with
+  Claude Desktop, Cursor, or any MCP client; stdio and HTTP/OpenAPI.
+- **Library UI** — a polished web application for people: a real folder tree (create,
+  rename, move, drag-to-upload), a table-of-contents document reader (read the whole doc
+  or any section), drag-and-drop upload with an accurate progress timeline, a navigable
+  Atlas map, search, a Memory browser, a tabbed Admin, and full version/conflict review.
 
 All three run on one consistent, transactional path.
 
@@ -303,16 +320,19 @@ local one) an objective comparison rather than a guess.
 
 ## 8. Roadmap and strategy
 
-The core is in place: pluggable extraction, LLM structuring with the faithfulness gate,
-the section/chunk model, editing and versioning with conflict resolution, the
-hierarchical Atlas, hybrid search, secure-by-default identity, and the REST + MCP +
-Library UI surfaces. Strategic direction from here:
+The core is in place: pluggable extraction with **AI language auto-detection** (correct
+OCR languages per document), LLM structuring with the faithfulness gate, the
+section/chunk model, editing and versioning with conflict resolution, the hierarchical
+Atlas, **hybrid search fusing BM25 + vectors + a derived knowledge graph**,
+**Markdown-native agent memory** (tiers, decay, per-agent scoping, secret redaction,
+auto-capture, transcript import), ingestion-time PII redaction, secure-by-default
+identity, and the REST + MCP + Library UI surfaces. Strategic direction from here:
 
 | Area | Why it matters |
 |---|---|
-| Source connectors (SharePoint / Drive / S3) | scheduled or on-demand import from where documents already live |
-| Translation | multilingual bases; answers in the user's language |
-| PII redaction | mask sensitive data before storing or sending to a model |
+| Scheduled source connectors (SharePoint / Drive / S3) | automatic sync from where documents already live (manual + S3 import shipped) |
+| Translation | answers in the user's language (language detection shipped) |
+| Distributed scale (shared rate-limit, multi-region) | large multi-replica deployments |
 | Per-tenant quotas & cost controls | predictable spend in shared deployments |
 | Backup / restore | a consistent database + object-store snapshot |
 | Observability & cost dashboards | tokens and $ per document, alerts |

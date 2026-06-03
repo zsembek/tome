@@ -30,6 +30,12 @@ def main(argv=None):
     dd.add_argument("--apply", action="store_true", help="delete duplicates (keep the oldest)")
     ri = sub.add_parser("reindex", help="reprocess documents (model/prompt change)")
     ri.add_argument("--all", action="store_true", help="all documents, not just stale ones")
+    mg = sub.add_parser("memory-gc", help="decay + evict stale low-value agent memories")
+    mg.add_argument("--agent", default=None, help="restrict to one agent_id")
+    sub.add_parser("graph-rebuild", help="rebuild the knowledge graph from documents")
+    sub.add_parser("demo-seed", help="seed a few sample documents (for demos / first run)")
+    ex = sub.add_parser("export-all", help="export every document as Markdown (backup)")
+    ex.add_argument("dir", help="output directory")
     args = p.parse_args(argv)
 
     cfg = get_config()
@@ -77,6 +83,47 @@ def main(argv=None):
         import json as _j
         res = reindex_all(db, db.default_workspace(), only_stale=not args.all)
         print(_j.dumps(res, ensure_ascii=False, indent=2))
+    elif args.cmd == "memory-gc":
+        from tome import memory
+        import json as _j
+        res = memory.decay_and_gc(db, ws=db.default_workspace(), agent_id=args.agent)
+        print(_j.dumps(res, ensure_ascii=False, indent=2))
+    elif args.cmd == "graph-rebuild":
+        from tome.graph import rebuild_graph
+        import json as _j
+        res = rebuild_graph(db, db.default_workspace())
+        print(_j.dumps(res, ensure_ascii=False, indent=2))
+    elif args.cmd == "demo-seed":
+        import dataclasses
+        from tome.pipeline.run import ingest
+        ws = db.default_workspace()
+        cfg2 = dataclasses.replace(cfg, extract_primary="passthrough", extract_fallback="")
+        samples = [
+            ("Manuals/Pumps", "Centrifugal Pump NTs-100",
+             "# Centrifugal Pump NTs-100\n\n## Specifications\n\nPressure 0.7 MPa, power 11 kW, "
+             "flow 36000 L/h.\n\n## Operation\n\nCheck the oil level before start.\n"),
+            ("Manuals/Valves", "Gate Valve DN50",
+             "# Gate Valve DN50\n\n## Overview\n\nThe Gate Valve DN50 controls flow in the main "
+             "line.\n\n## Maintenance\n\nInspect the seal yearly.\n"),
+            ("Safety", "Safety Guidelines",
+             "# Safety Guidelines\n\n## PPE\n\nWear protective equipment and gloves.\n\n## Lockout"
+             "\n\nFollow lockout-tagout before service.\n"),
+        ]
+        for folder, title, md in samples:
+            ingest(db, workspace_id=ws, file_bytes=md.encode("utf-8"), filename=f"{title}.md",
+                   mime="text/markdown", folder_path=folder, title_override=title, cfg=cfg2)
+        print(f"OK: seeded {len(samples)} demo documents")
+    elif args.cmd == "export-all":
+        outdir = Path(args.dir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        ws = db.default_workspace()
+        n = 0
+        for d in db.list_all_documents(ws):
+            md = "\n\n".join(p["content"] for p in db.get_document_parts(d["id"], None))
+            safe = "".join(c if (c.isalnum() or c in " -_.") else "_" for c in d["title"])[:80]
+            (outdir / f"{d['id']}_{safe or 'doc'}.md").write_text(md, encoding="utf-8")
+            n += 1
+        print(f"OK: exported {n} documents to {outdir}")
     return 0
 
 

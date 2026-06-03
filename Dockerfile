@@ -11,7 +11,11 @@ COPY pyproject.toml ./
 COPY tome ./tome
 COPY api ./api
 COPY mcp_server ./mcp_server
-RUN pip install .
+# Optional extras baked into the image. Default is a lean image; the local /
+# air-gapped profile builds with TOME_EXTRAS=fastembed so offline embeddings work
+# without a manual rebuild (docker-compose.local.yml passes this build arg).
+ARG TOME_EXTRAS=""
+RUN if [ -n "$TOME_EXTRAS" ]; then pip install ".[$TOME_EXTRAS]"; else pip install .; fi
 
 # unprivileged user (non-root) + permissions on the stage/store volumes
 RUN useradd -r -u 10001 -m -d /home/tome tome \

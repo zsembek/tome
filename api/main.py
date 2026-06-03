@@ -18,8 +18,8 @@ from tome.pipeline.run import ingest
 from tome.store import hybrid_search
 from tome.storage import get_store
 from tome import edit as ed
-from api.deps import (current_token, current_user, current_workspace, get_db,
-                      init_db, require_admin, require_auth)
+from api.deps import (current_agent_id, current_token, current_user, current_workspace,
+                      get_db, init_db, invalidate_scope_cache, require_admin, require_auth)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -99,11 +99,23 @@ def list_folders(parent_id: int | None = None, lazy: bool = False):
 
 
 @app.post("/v1/folders", dependencies=[Depends(require_auth)])
-def create_folder(path: str = Body(..., embed=True),
+def create_folder(path: str | None = Body(None, embed=True),
+                  name: str | None = Body(None, embed=True),
+                  parent_id: int | None = Body(None, embed=True),
                   description: str = Body("", embed=True)):
+    """Create a folder. Either by display `name` (+ optional `parent_id`) for a
+    single node anywhere in the tree, or by a human `path` like 'A/B/C' (cascade)."""
     db = get_db()
     ws = current_workspace()
-    fid = db.ensure_folder_path(ws, path)
+    if name and name.strip():
+        try:
+            fid = db.create_subfolder(ws, parent_id, name.strip())
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    elif path:
+        fid = db.ensure_folder_path(ws, path)
+    else:
+        raise HTTPException(400, "provide 'name' (+optional parent_id) or 'path'")
     if description:
         try:
             ed.rename_folder(db, fid, description=description)
@@ -114,7 +126,7 @@ def create_folder(path: str = Body(..., embed=True),
         refresh_atlas_index(db, ws)
     except Exception:
         pass
-    return {"folder_id": fid, "path": path}
+    return {"folder_id": fid, "path": path or name}
 
 
 # ─────────────────────────── Documents ─────────────────────────
@@ -122,6 +134,7 @@ def create_folder(path: str = Body(..., embed=True),
 async def upload_document(
     file: UploadFile = File(...),
     folder_path: str | None = Form(None),
+    folder_id: int | None = Form(None),
     auto_file: bool = Form(False),
 ):
     db = get_db()
@@ -131,15 +144,34 @@ async def upload_document(
     if cap and len(data) > cap:
         raise HTTPException(413, f"file too large (> {get_config().max_upload_mb} MB)")
     job_id = db.create_job(ws, {"filename": file.filename,
-                                "folder_path": folder_path, "auto_file": auto_file,
-                                "mime": file.content_type or ""})
-    # stage the bytes to a temp area for the worker
+                                "folder_path": folder_path, "folder_id": folder_id,
+                                "auto_file": auto_file, "mime": file.content_type or ""})
+    # stage the bytes to a temp area for the worker (meta: filename, mime, folder_path,
+    # auto_file, folder_id — one per line)
     _STAGE.mkdir(parents=True, exist_ok=True)
     (_STAGE / f"{job_id}.bin").write_bytes(data)
     (_STAGE / f"{job_id}.meta").write_text(
-        f"{file.filename}\n{file.content_type or ''}\n{folder_path or ''}\n{int(auto_file)}",
+        f"{file.filename}\n{file.content_type or ''}\n{folder_path or ''}\n"
+        f"{int(auto_file)}\n{folder_id if folder_id is not None else ''}",
         encoding="utf-8")
     return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/v1/documents/markdown", dependencies=[Depends(require_auth)])
+def ingest_markdown_ep(title: str = Body(..., embed=True),
+                       content: str = Body(..., embed=True),
+                       folder_path: str | None = Body(None, embed=True),
+                       folder_id: int | None = Body(None, embed=True)):
+    """Ingest ready Markdown directly (no file upload, no extraction) into a folder
+    (created on demand from `folder_path`, or an exact `folder_id`)."""
+    import dataclasses
+    db = get_db()
+    cfg = dataclasses.replace(get_config(), extract_primary="passthrough", extract_fallback="")
+    fn = title if title.lower().endswith((".md", ".markdown")) else f"{title}.md"
+    did = ingest(db, workspace_id=current_workspace(), file_bytes=content.encode("utf-8"),
+                 filename=fn, mime="text/markdown", folder_path=folder_path,
+                 folder_id=folder_id, title_override=title, cfg=cfg)
+    return {"document_id": did, "title": title}
 
 
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_auth)])
@@ -231,6 +263,177 @@ def get_atlas(scope: str = "index"):
     return {"scope": scope, "markdown": get_db().get_atlas(current_workspace(), scope)}
 
 
+@app.get("/v1/atlas/tree", dependencies=[Depends(require_auth)])
+def atlas_tree():
+    """The Atlas as a real nested structure: named folders → children → documents.
+    Powers the navigable map in the UI (not a flat document list)."""
+    db = get_db(); ws = current_workspace()
+    folders = db.folder_tree(ws)
+    docs = db.list_all_documents(ws)
+    by_parent: dict[int | None, list] = {}
+    for f in folders:
+        by_parent.setdefault(f["parent_id"], []).append(f)
+    docs_by_folder: dict[int | None, list] = {}
+    for d in docs:
+        docs_by_folder.setdefault(d["folder_id"], []).append(
+            {"id": d["id"], "title": d["title"], "status": d.get("status")})
+
+    def build(node):
+        return {"id": node["id"], "name": node["name"], "path": node.get("path", ""),
+                "description": node.get("description", ""), "doc_count": node.get("doc_count", 0),
+                "documents": docs_by_folder.get(node["id"], []),
+                "children": [build(c) for c in by_parent.get(node["id"], [])]}
+
+    return {"tree": [build(f) for f in by_parent.get(None, [])],
+            "unfiled": docs_by_folder.get(None, [])}
+
+
+# ─────────────────────────── Agent memory ──────────────────────
+def _memory_embedding(text: str):
+    """Embed memory text for vector recall when an embedder is configured."""
+    cfg = get_config()
+    if not cfg.memory_enabled:
+        return None
+    emb = get_embedder(cfg)
+    if not emb:
+        return None
+    try:
+        return emb.embed([text])[0]
+    except Exception:
+        return None
+
+
+@app.post("/v1/memory", dependencies=[Depends(require_auth)])
+def memory_remember(content: str = Body(..., embed=True),
+                    title: str = Body("", embed=True),
+                    tier: str = Body("semantic", embed=True),
+                    scope: str | None = Body(None, embed=True),
+                    mkey: str = Body("", embed=True),
+                    session_id: str = Body("", embed=True),
+                    importance: float = Body(1.0, embed=True),
+                    agent_id: str = Depends(current_agent_id)):
+    """Store a Markdown memory. Secrets are redacted; `mkey` supersedes prior
+    memories with the same key (contradiction resolution)."""
+    from tome import memory
+    try:
+        row = memory.remember(get_db(), ws=current_workspace(), agent_id=agent_id,
+                              content=content, title=title, tier=tier, scope=scope,
+                              mkey=mkey, session_id=session_id, importance=importance,
+                              embedding=_memory_embedding(content))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"id": row["id"], "agent_id": row["agent_id"], "scope": row["scope"],
+            "tier": row["tier"]}
+
+
+@app.get("/v1/memory", dependencies=[Depends(require_auth)])
+def memory_list(tier: str | None = None, scope: str | None = None,
+                limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0),
+                agent_id: str = Depends(current_agent_id)):
+    from tome import memory
+    return {"memories": memory.list_memory(get_db(), ws=current_workspace(),
+                                           agent_id=agent_id, tier=tier, scope=scope,
+                                           limit=limit, offset=offset)}
+
+
+@app.get("/v1/memory/recall", dependencies=[Depends(require_auth)])
+def memory_recall(q: str, top_k: int = Query(8, ge=1, le=50), tier: str | None = None,
+                  agent_id: str = Depends(current_agent_id)):
+    from tome import memory
+    return {"results": memory.recall(get_db(), ws=current_workspace(), agent_id=agent_id,
+                                     query=q, top_k=top_k, tier=tier,
+                                     query_embedding=_memory_embedding(q))}
+
+
+@app.post("/v1/memory/observe", dependencies=[Depends(require_auth)])
+def memory_observe(content: str = Body(..., embed=True),
+                   session_id: str = Body("", embed=True),
+                   scope: str | None = Body(None, embed=True),
+                   agent_id: str = Depends(current_agent_id)):
+    """Append a raw working-tier observation (idempotent per session)."""
+    from tome import memory
+    row = memory.observe(get_db(), ws=current_workspace(), agent_id=agent_id,
+                         content=content, session_id=session_id, scope=scope)
+    return {"id": row["id"], "tier": "working"}
+
+
+@app.post("/v1/memory/consolidate", dependencies=[Depends(require_auth)])
+def memory_consolidate(session_id: str = Body("", embed=True),
+                       agent_id: str = Depends(current_agent_id)):
+    """Roll up a session's working observations into an episodic memory and
+    promote durable facts to semantic memory (LLM when configured, else raw)."""
+    from tome import memory
+    cfg = get_config()
+    llm = None
+    try:
+        from tome.llm.registry import get_llm
+        llm = get_llm(cfg)
+    except Exception:
+        llm = None
+    return memory.consolidate(get_db(), ws=current_workspace(), agent_id=agent_id,
+                              session_id=session_id, llm=llm, model=cfg.llm_atlas_model)
+
+
+@app.post("/v1/memory/transcript", dependencies=[Depends(require_auth)])
+def memory_transcript(transcript=Body(..., embed=True),
+                      session_id: str = Body("", embed=True),
+                      consolidate: bool = Body(True, embed=True),
+                      agent_id: str = Depends(current_agent_id)):
+    """Import a conversation transcript into memory (each turn → observation, then
+    consolidate). `transcript`: a string, list of strings, or list of {role, text}."""
+    from tome import memory
+    cfg = get_config()
+    llm = None
+    if consolidate:
+        try:
+            from tome.llm.registry import get_llm
+            llm = get_llm(cfg)
+        except Exception:
+            llm = None
+    return memory.import_transcript(get_db(), ws=current_workspace(), agent_id=agent_id,
+                                    transcript=transcript, session_id=session_id,
+                                    consolidate_after=consolidate, llm=llm, model=cfg.llm_atlas_model)
+
+
+@app.get("/v1/memory/{mem_id}", dependencies=[Depends(require_auth)])
+def memory_get(mem_id: int):
+    from tome import memory
+    row = memory.get_memory(get_db(), ws=current_workspace(), mem_id=mem_id)
+    if not row:
+        raise HTTPException(404, "memory not found")
+    return row
+
+
+@app.delete("/v1/memory/{mem_id}", dependencies=[Depends(require_auth)])
+def memory_forget(mem_id: int):
+    from tome import memory
+    if not memory.forget(get_db(), ws=current_workspace(), mem_id=mem_id, author="user"):
+        raise HTTPException(404, "memory not found")
+    return {"deleted": mem_id}
+
+
+# ─────────────────────────── Knowledge graph ───────────────────
+@app.get("/v1/graph/entities", dependencies=[Depends(require_auth)])
+def graph_entities(q: str = "", limit: int = Query(50, ge=1, le=500)):
+    from tome.graph import list_entities
+    return {"entities": list_entities(get_db(), current_workspace(), q, limit)}
+
+
+@app.get("/v1/graph/entities/{entity_id}", dependencies=[Depends(require_auth)])
+def graph_entity(entity_id: int):
+    from tome.graph import get_entity
+    e = get_entity(get_db(), current_workspace(), entity_id)
+    if not e:
+        raise HTTPException(404, "entity not found")
+    return e
+
+
+@app.post("/v1/graph/rebuild", dependencies=[Depends(require_auth)])
+def graph_rebuild():
+    from tome.graph import rebuild_graph
+    return rebuild_graph(get_db(), current_workspace())
+
+
 @app.get("/v1/extractors", dependencies=[Depends(require_auth)])
 def list_extractors_ep():
     """Catalog of pluggable extractors with verified/experimental status + pip extra."""
@@ -287,9 +490,10 @@ def section_revisions(section_id: int):
 # ─────────────────────────── Document / folder ops ─────────────
 @app.patch("/v1/documents/{doc_id}", dependencies=[Depends(require_auth)])
 def patch_document(doc_id: int, title: str | None = Body(None),
-                   tags: list[str] | None = Body(None), folder_path: str | None = Body(None)):
+                   tags: list[str] | None = Body(None), folder_path: str | None = Body(None),
+                   folder_id: int | None = Body(None)):
     ed.update_document(get_db(), doc_id, title=title, tags=tags, folder_path=folder_path,
-                       workspace_id=current_workspace())
+                       folder_id=folder_id, workspace_id=current_workspace())
     return {"updated": doc_id}
 
 
@@ -492,6 +696,7 @@ def list_api_keys():
 @app.delete("/v1/api-keys/{key_id}", dependencies=[Depends(require_admin)])
 def delete_api_key(key_id: int):
     get_db().delete_api_key(current_workspace(), key_id)
+    invalidate_scope_cache()   # the deleted key must stop working immediately
     return {"deleted": key_id}
 
 
@@ -550,6 +755,7 @@ def auth_login(email: str = Body(..., embed=True), password: str = Body(..., emb
 @app.post("/v1/auth/logout")
 def auth_logout(token: str = Depends(current_token)):
     get_db().delete_session(token)
+    invalidate_scope_cache(token)   # revoke immediately (no TTL stale window)
     return {"ok": True}
 
 
@@ -594,6 +800,7 @@ def update_user_ep(uid: int, role: str | None = Body(None),
         db.update_user(ws, uid, role=role, password=password, disabled=disabled)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    invalidate_scope_cache()   # role/disable/password change → re-resolve scopes now
     return {"updated": uid}
 
 
@@ -603,6 +810,7 @@ def delete_user_ep(uid: int):
     if _last_active_admin(db, ws, uid):
         raise HTTPException(400, "cannot delete the last active admin")
     db.delete_user(ws, uid)
+    invalidate_scope_cache()
     return {"deleted": uid}
 
 
@@ -659,9 +867,11 @@ def _worker_loop():
                     db.update_job(jid, status="error", error="staged file missing")
                     continue
                 data = binp.read_bytes()
-                fn, mime, folder, autof = (metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0"])[:4]
+                fn, mime, folder, autof, fid = (
+                    metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0", ""])[:5]
                 ingest(db, workspace_id=current_workspace(), file_bytes=data,
                        filename=fn, mime=mime, folder_path=(folder or None),
+                       folder_id=(int(fid) if fid.strip() else None),
                        auto_file=(autof == "1"), job_id=jid)
             finally:
                 binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)

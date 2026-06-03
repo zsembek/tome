@@ -51,6 +51,93 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   runs the gated Docling/fastembed/reranker tests for real.
 - Surfaced `extract_confidence` on the document detail endpoint.
 
+### Sprint 3 — Agent memory (Markdown-native)
+- **Agent memory** (`tome/memory.py`, `agent_memory` table): long-term memory stored as
+  canonical **Markdown**, kept separate from the document KB (no Atlas/folder pollution)
+  yet searched by the same hybrid BM25 (+ optional pgvector) machinery.
+- **Tiers + consolidation**: working → episodic → semantic → procedural; `observe`
+  logs raw notes, `consolidate` distils a session into an episodic summary and promotes
+  durable facts (LLM when configured, deterministic raw roll-up offline).
+- **Hygiene**: secret redaction before storage (`tome/redact.py` — API keys, tokens,
+  PEM, `<private>…</private>`); recall reinforces importance; time-decay + GC eviction
+  (`tome memory-gc`); contradiction resolution via `mkey` supersession; append-only
+  `memory_audit` trail for deletions.
+- **Per-agent scoping**: `shared` (workspace) vs `agent` (private) visibility, selected
+  by `MEMORY_SCOPE` and the `X-Agent-Id` header / `agent_id` param.
+- **Surfaces**: REST `/v1/memory` (+ `recall`/`observe`/`consolidate`), 6 new MCP tools
+  (`remember · recall · list_memory · observe · consolidate · forget`), and a **Memory**
+  tab in the Library UI.
+- **Auto-capture**: a drop-in Claude Code hook (`examples/hooks/`) that `observe`s on
+  tool use and `consolidate`s at the end of a turn — agent memory with zero code.
+- Locked the Markdown-canonical contract for memory (`test_memory_namespace_is_markdown`
+  is now a real passing test, no longer xfail).
+
+#### Carried debt closed (from Sprints 0–2)
+- **Immediate revocation**: the auth scope cache is now invalidated on logout, user
+  disable/role change, and api-key deletion (no ≤30s stale-access window).
+- **Offline embeddings out of the box**: a `TOME_EXTRAS` Docker build arg bakes the
+  `fastembed` extra into the local/air-gapped image (`docker-compose.local.yml`) — no
+  manual rebuild to switch `EMBED_PROVIDER=fastembed`.
+- Verified the gated `extras` path (real fastembed embedder) locally.
+
+### Sprint 4 — Library UI v2 & ingestion parity (MLP)
+- **Folder tree v2**: real recursive tree with per-node actions (new subfolder, rename,
+  delete, upload-here), inline creation at any depth, drag-a-document-to-move, and
+  drag-a-file-to-upload-into-folder. Selected folder is the default upload target.
+- **Document reader v2**: a table-of-contents sidebar + content pane; read the full
+  document or any individual section/chunk, with inline section editing, version history,
+  export, and per-section conflict resolution.
+- **Atlas v2**: a real navigable hierarchy (named folders → children → documents,
+  clickable) plus the generated Markdown overview — no more flat `<pre>` dump.
+- **Admin v2**: tabbed Users / API keys / Webhooks with proper tables, validation,
+  copy-once keys, last-used/last-login, webhook event selection, and toasts.
+- **Accurate progress**: finer-grained per-page progress in the pipeline; the UI shows a
+  real stage timeline and surfaces success/error/conflict as toasts.
+- **Ingestion parity (REST)**: `POST /v1/documents/markdown` ingests ready Markdown into
+  a folder (`folder_path` cascade or exact `folder_id`); `POST /v1/folders` creates a
+  subfolder by `name` + `parent_id`; documents move by `folder_id`; `GET /v1/atlas/tree`
+  returns the structured hierarchy; file upload accepts a target `folder_id`.
+- **Ingestion parity (MCP)**: `ingest_markdown` (ready Markdown, no processing) and
+  `ingest_file` (base64 bytes → full extraction pipeline), both into a folder tree.
+- Design system: reusable Tabs, Menu, Toast, Spinner, EmptyState primitives.
+- Test hygiene: the suite now hard-neutralizes any local LLM/cloud credentials so it runs
+  fully offline, deterministically, and for free.
+
+### Sprint 6 — Knowledge graph (derived 3rd retrieval signal)
+- **Knowledge graph** (`tome/graph.py`, `graph_entities`/`graph_mentions`/`graph_edges`):
+  entities (key phrases, model codes, acronyms) and co-occurrence relations are extracted
+  **deterministically** from Markdown (no LLM required, no graph DB) and fused into hybrid
+  search as a **third RRF signal** alongside BM25 + vectors. Fully rebuildable
+  (`tome graph-rebuild`, `POST /v1/graph/rebuild`).
+- REST `/v1/graph/entities`, `/v1/graph/entities/{id}` (mentions + neighbors); MCP
+  `list_entities` / `get_entity`; a **Graph** tab in the Library UI to browse entities,
+  pivot to the sections that mention them, and to related entities.
+
+### Sprint 7 — Ingestion hygiene & connectors
+- **AI language pre-analysis** (`tome/lang.py`): detect a document's real language(s)
+  (LLM when available, deterministic Unicode-script + stop-word heuristic otherwise) and
+  **re-scan OCR with the correct engine languages** — fixes garbled multi-language scans.
+  The detected language is recorded on the document.
+- **Ingestion-time PII/secret redaction** (`INGEST_REDACT`): strip secrets from document
+  text during ingestion (faithfulness compared fairly on redacted text).
+- **Transcript import**: `POST /v1/memory/transcript` + MCP `import_transcript` turn a
+  conversation (string, lines, or {role,text}) into memory (observe + consolidate).
+
+### Sprint 8 — Operations
+- `tome demo-seed` (sample documents for first-run/demos) and `tome export-all <dir>`
+  (Markdown backup of every document). Admin gained a **Health** tab (usage + corpus
+  faithfulness eval).
+
+### Fixes (resilience & performance)
+- **LLM no longer freezes ingestion.** A slow/unreachable model used to stall each page
+  ~100s (5× exponential-backoff retries + the SDK's own retries). Added a per-request
+  `LLM_TIMEOUT` and a bounded `LLM_MAX_RETRIES` (SDK internal retries disabled).
+- **Smart-skip actually works now.** The `_NOISE_HINT` regex ended in `[-￿]` — a range
+  matching nearly every character — so clean Markdown was never recognized as clean and
+  the LLM ran on every page. Fixed; clean pages skip the LLM.
+- `STRUCTURE_ENABLED` master switch to keep extracted text as-is (no LLM cost) for
+  already-clean Markdown sources.
+
 ### Branding & docs
 - Added the Tome logo (`assets/logo.svg` + PNGs, `webui/public/favicon.*`), wired the
   favicon/apple-touch icon into the Library UI and used the mark in the UI header/login.

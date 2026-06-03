@@ -40,10 +40,11 @@ export const api = {
   patch: (p: string, body?: any) =>
     fetch(`/v1${p}`, { method: "PATCH", headers: headers(), body: JSON.stringify(body ?? {}) }).then(handle),
   del: (p: string) => fetch(`/v1${p}`, { method: "DELETE", headers: headers(false) }).then(handle),
-  upload: (file: File, folderPath?: string) => {
+  upload: (file: File, opts?: { folderId?: number | null; folderPath?: string }) => {
     const fd = new FormData();
     fd.append("file", file);
-    if (folderPath) fd.append("folder_path", folderPath);
+    if (opts?.folderId != null) fd.append("folder_id", String(opts.folderId));
+    else if (opts?.folderPath) fd.append("folder_path", opts.folderPath);
     else fd.append("auto_file", "true");
     const h: Record<string, string> = {};
     const t = getToken();
@@ -81,6 +82,79 @@ export const auth = {
     try { await api.post("/auth/logout"); } catch {}
     setToken("");
   },
+};
+
+// ── Folders / documents / atlas helpers ─────────────────────────
+export const folders = {
+  roots: (): Promise<{ folders: Folder[] }> => api.get("/folders?lazy=true"),
+  children: (parentId: number): Promise<{ folders: Folder[] }> =>
+    api.get(`/folders?lazy=true&parent_id=${parentId}`),
+  documents: (folderId: number): Promise<{ documents: Doc[] }> =>
+    api.get(`/folders/${folderId}/documents?limit=500`),
+  create: (name: string, parentId?: number | null) =>
+    api.post("/folders", { name, parent_id: parentId ?? null }),
+  rename: (id: number, name: string) => api.patch(`/folders/${id}`, { name }),
+  describe: (id: number, description: string) => api.patch(`/folders/${id}`, { description }),
+  move: (id: number, newParentId: number | null) =>
+    api.post(`/folders/${id}/move`, { new_parent_id: newParentId }),
+  remove: (id: number) => api.del(`/folders/${id}`),
+};
+
+export const docs = {
+  get: (id: number): Promise<Doc & { extract_confidence: number | null }> => api.get(`/documents/${id}`),
+  content: (id: number): Promise<{ markdown: string }> => api.get(`/documents/${id}/content`),
+  sections: (id: number, depth = 6): Promise<{ sections: Section[] }> =>
+    api.get(`/documents/${id}/sections?depth=${depth}`),
+  ingestMarkdown: (title: string, content: string, folderId?: number | null, folderPath?: string) =>
+    api.post("/documents/markdown", { title, content, folder_id: folderId ?? null, folder_path: folderPath ?? null }),
+  move: (id: number, folderId: number) => api.patch(`/documents/${id}`, { folder_id: folderId }),
+  rename: (id: number, title: string) => api.patch(`/documents/${id}`, { title }),
+  remove: (id: number) => api.del(`/documents/${id}`),
+};
+
+export interface AtlasNode {
+  id: number; name: string; path: string; description: string; doc_count: number;
+  documents: { id: number; title: string; status?: string }[]; children: AtlasNode[];
+}
+export const atlas = {
+  tree: (): Promise<{ tree: AtlasNode[]; unfiled: { id: number; title: string }[] }> =>
+    api.get("/atlas/tree"),
+  markdown: (): Promise<{ markdown: string }> => api.get("/atlas"),
+};
+
+// ── Knowledge graph (derived) ───────────────────────────────────
+export interface GraphEntity { id: number; name: string; kind: string; mention_count: number }
+export interface EntityDetail {
+  entity: GraphEntity;
+  sections: { section_id: number; heading: string; document_id: number; doc_title: string }[];
+  neighbors: { id: number; name: string; kind: string; weight: number }[];
+}
+export const graph = {
+  entities: (q = ""): Promise<{ entities: GraphEntity[] }> => api.get(`/graph/entities${_q({ q, limit: "150" })}`),
+  entity: (id: number): Promise<EntityDetail> => api.get(`/graph/entities/${id}`),
+  rebuild: (): Promise<{ documents: number; entities: number }> => api.post("/graph/rebuild"),
+};
+
+// ── Agent memory (Markdown-native) ──────────────────────────────
+export interface MemoryItem {
+  id: number; agent_id: string; scope: string; tier: string; session_id: string;
+  mkey: string; title: string; content: string; importance: number;
+  access_count: number; created_at: string; last_accessed_at: string; score?: number;
+}
+
+function _q(params: Record<string, string>) {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) u.set(k, v);
+  const s = u.toString();
+  return s ? `?${s}` : "";
+}
+
+export const memory = {
+  list: (tier = "", agentId = ""): Promise<{ memories: MemoryItem[] }> =>
+    api.get(`/memory${_q({ tier, agent_id: agentId, limit: "200" })}`),
+  recall: (q: string, agentId = ""): Promise<{ results: MemoryItem[] }> =>
+    api.get(`/memory/recall${_q({ q, agent_id: agentId, top_k: "20" })}`),
+  forget: (id: number) => api.del(`/memory/${id}`),
 };
 
 // ── Short-lived signed image URLs (instead of putting the token in the URL) ──

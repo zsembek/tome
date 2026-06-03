@@ -31,7 +31,7 @@ _FIG_TOKEN = "[[FIGURE_{n:04d}]]"
 
 def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime: str,
            folder_path: str | None = None, folder_id: int | None = None,
-           auto_file: bool = False,
+           auto_file: bool = False, title_override: str | None = None,
            job_id: int | None = None, cfg: Config | None = None) -> int:
     cfg = cfg or get_config()
     # per-workspace settings override env limits (§ settings)
@@ -77,7 +77,10 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     page_confidences = [p.confidence for p in extracted.pages if p.confidence is not None]
     extract_confidence = round(sum(page_confidences) / len(page_confidences), 3) if page_confidences else None
 
-    for page in extracted.pages:
+    n_pages = max(1, len(extracted.pages))
+    for pi, page in enumerate(extracted.pages):
+        # finer-grained progress across the structure stage (0.30 → 0.55)
+        progress("structure", round(0.30 + 0.25 * (pi / n_pages), 3))
         raw = page.text or ""
         raw_pages.append(raw)
         # insert figure tokens (vision will substitute descriptions)
@@ -137,12 +140,19 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
 
     full_md = clean("\n\n".join(page_mds))
 
+    # Optional ingestion-time secret/PII redaction (untrusted sources / compliance).
+    raw_pages_for_verify = raw_pages
+    if cfg.ingest_redact:
+        from tome.redact import redact as _redact
+        full_md = _redact(full_md)
+        raw_pages_for_verify = [_redact(r) for r in raw_pages]  # fair faithfulness compare
+
     # Document-level faithfulness: the final markdown against the ENTIRE raw extract.
     # This catches losses during clean/split/assembly (not just per-page structure) and
     # is NOT trivially 1.0 under the smart skip. The honesty boundary: completeness is
     # guaranteed RELATIVE to what the extractor pulled out; the quality of the OCR itself
     # is reflected by extract_confidence (if the provider reports it).
-    raw_all = "\n\n".join(raw_pages)
+    raw_all = "\n\n".join(raw_pages_for_verify)
     if raw_all.strip():
         doc_rep = verify(raw_all, full_md, min_score=cfg.faithfulness_min, target_lang=tlang)
         worst_faith = min(worst_faith, doc_rep.score)
@@ -154,7 +164,12 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     progress("name", 0.6)
     existing = [f["path"] for f in db.folder_tree(workspace_id)]
     meta = derive_metadata(full_md, cfg, tlang, existing, filename)
-    language = (meta.get("language") or "").strip() or _guess_lang(full_md)
+    if title_override:
+        meta["title"] = title_override   # honor a caller-supplied title (ready-Markdown ingest)
+    # prefer the language detected by the extractor's AI pre-analysis (the OCR was tuned
+    # to it), then naming, then a script-based guess
+    detected_lang = (extracted.metadata.get("language") or "").strip()
+    language = detected_lang or (meta.get("language") or "").strip() or _guess_lang(full_md)
 
     # folder placement (folder_id takes priority — exact, no name ambiguity)
     if folder_id is not None:
@@ -245,7 +260,15 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         except Exception as exc:
             log.debug("insert_asset fail: %s", exc)
 
-    # 8. Atlas (delta for the folder)
+    # 8. Knowledge graph (derived entities + co-occurrence) — never fails ingest
+    if cfg.graph_enabled:
+        try:
+            from tome.graph import build_graph_for_document
+            build_graph_for_document(db, workspace_id, doc_id)
+        except Exception as exc:
+            log.debug("graph build skipped: %s", exc)
+
+    # 9. Atlas (delta for the folder)
     progress("atlas", 0.95)
     if fid:
         _refresh_atlas_node(db, workspace_id, fid, cfg, tlang)
