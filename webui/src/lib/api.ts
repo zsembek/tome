@@ -110,6 +110,17 @@ export const docs = {
   move: (id: number, folderId: number) => api.patch(`/documents/${id}`, { folder_id: folderId }),
   rename: (id: number, title: string) => api.patch(`/documents/${id}`, { title }),
   remove: (id: number) => api.del(`/documents/${id}`),
+  downloadSource: (id: number, filename: string) => api.download(`/documents/${id}/source`, filename),
+};
+
+export interface Job {
+  id: number; status: string; stage: string; progress: number; document_id: number | null;
+  faithfulness_score: number | null; tokens_in: number; tokens_out: number; attempts: number;
+  error: string | null; created_at: string; updated_at: string;
+  filename: string | null; pages_total: number | null; pages_done: number; source_key: string | null;
+}
+export const jobsApi = {
+  list: (): Promise<{ jobs: Job[] }> => api.get("/jobs?limit=200"),
 };
 
 export interface AtlasNode {

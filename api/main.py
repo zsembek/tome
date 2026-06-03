@@ -174,12 +174,35 @@ def ingest_markdown_ep(title: str = Body(..., embed=True),
     return {"document_id": did, "title": title}
 
 
+@app.get("/v1/jobs", dependencies=[Depends(require_auth)])
+def list_jobs(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+    """All ingestion jobs (newest first) — the durable Processing view: per-file status,
+    stage, page progress, faithfulness, errors. Survives a page reload (server-backed)."""
+    return {"jobs": get_db().list_jobs(current_workspace(), limit=limit, offset=offset)}
+
+
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_auth)])
 def get_job(job_id: int):
     job = get_db().get_job(job_id)
     if not job:
         raise HTTPException(404, "job not found")
     return job
+
+
+@app.get("/v1/documents/{doc_id}/source", dependencies=[Depends(require_auth)])
+def download_source(doc_id: int):
+    """Download the ORIGINAL uploaded file for a document."""
+    from fastapi.responses import Response
+    db = get_db()
+    doc = db.get_document(doc_id)
+    if not doc or not doc.get("source_object_key"):
+        raise HTTPException(404, "original file not available")
+    data = get_store().get(doc["source_object_key"])
+    if data is None:
+        raise HTTPException(404, "original file not found in store")
+    name = doc.get("source_filename") or f"document_{doc_id}"
+    return Response(content=data, media_type=doc.get("mime_type") or "application/octet-stream",
+                    headers={"Content-Disposition": _disposition(name)})
 
 
 @app.get("/v1/folders/{folder_id}/documents", dependencies=[Depends(require_auth)])

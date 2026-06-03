@@ -573,6 +573,31 @@ class DB:
             cur.execute("SELECT * FROM ingestion_jobs WHERE id=%s", (job_id,))
             return cur.fetchone()
 
+    def list_jobs(self, ws: int, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Recent ingestion jobs for the workspace — for the durable Jobs/Processing view.
+        Includes per-page progress (pages_done / pages_total) and the source filename."""
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT j.id, j.status, j.stage, j.progress, j.document_id,
+                                  j.faithfulness_score, j.tokens_in, j.tokens_out, j.attempts,
+                                  j.error, j.created_at, j.updated_at,
+                                  j.payload->>'filename' AS filename,
+                                  (j.payload->>'pages_total')::int AS pages_total,
+                                  (SELECT count(*) FROM ingestion_page_results r WHERE r.job_id=j.id) AS pages_done,
+                                  (SELECT source_object_key FROM documents d WHERE d.id=j.document_id) AS source_key
+                           FROM ingestion_jobs j
+                           WHERE j.workspace_id=%s ORDER BY j.id DESC LIMIT %s OFFSET %s""",
+                        (ws, limit, offset))
+            return list(cur.fetchall())
+
+    def merge_job_payload(self, job_id: int, data: dict):
+        """Shallow-merge keys into the job payload (preserves filename etc.)."""
+        import json
+        if not job_id:
+            return
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("UPDATE ingestion_jobs SET payload = payload || %s::jsonb, updated_at=NOW() "
+                        "WHERE id=%s", (json.dumps(data), job_id))
+
     def document_extract_confidence(self, doc_id: int) -> float | None:
         """OCR/extract confidence reported by the latest completed ingest job."""
         with self.pool.connection() as conn, conn.cursor() as cur:

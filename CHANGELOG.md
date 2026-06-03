@@ -128,6 +128,15 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   (Markdown backup of every document). Admin gained a **Health** tab (usage + corpus
   faithfulness eval).
 
+### Processing / Jobs view
+- **Durable Processing view** (`GET /v1/jobs` + a Library UI "Processing" tab): every
+  ingestion job listed per file with live status, stage, **per-page progress**
+  (`page X/N`), faithfulness, attempts and errors. Server-backed, so it **survives a page
+  reload** and shows multiple files side by side (the old in-memory bottom widget lost
+  state on refresh and showed no real progress).
+- **Download originals**: `GET /v1/documents/{id}/source` returns the original uploaded
+  file; the Processing view exposes a download button per document.
+
 ### Fixes (resilience & performance)
 - **Resumable ingestion (per-page checkpoints).** Large documents are processed page by
   page, and each page's result is checkpointed (`ingestion_page_results`). If a job fails

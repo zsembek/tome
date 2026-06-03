@@ -79,6 +79,8 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
 
     n_pages = max(1, len(extracted.pages))
     is_pdf = (mime == "application/pdf") or filename.lower().endswith(".pdf")
+    if job_id:
+        db.merge_job_payload(job_id, {"pages_total": n_pages})   # for the Jobs view
     # resume: page results already completed in a previous (failed) attempt of this job
     page_results = db.get_page_results(job_id) if job_id else {}
 
@@ -136,8 +138,8 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         return md, page_assets, faith
 
     for pi, page in enumerate(extracted.pages):
-        # finer-grained progress across the structure stage (0.30 → 0.55)
-        progress("structure", round(0.30 + 0.25 * (pi / n_pages), 3))
+        # finer-grained, visible per-page progress (0.30 → 0.55)
+        progress(f"structuring page {pi + 1}/{n_pages}", round(0.30 + 0.25 * (pi / n_pages), 3))
         raw = page.text or ""
         raw_pages.append(raw)
         # insert figure tokens (vision substitutes descriptions)
@@ -231,9 +233,9 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                                             faith=round(worst_faith, 3))
             if job_id:
                 db.update_job(job_id, status="done", stage="conflict_pending", progress=1.0,
-                              document_id=existing["id"],
-                              payload={"conflict": True, "pending_version": vno,
-                                       "snapshot_key": snap_key})
+                              document_id=existing["id"])
+                db.merge_job_payload(job_id, {"conflict": True, "pending_version": vno,
+                                              "snapshot_key": snap_key})
                 db.clear_page_results(job_id)
             return existing["id"]
         # no manual edits → safe to replace (delete the old one, recreate)
@@ -302,12 +304,12 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     _refresh_atlas_index(db, workspace_id)
 
     if job_id:
-        import json as _json
         db.update_job(job_id, status="done", stage="done", progress=1.0,
                       document_id=doc_id, tokens_in=tok_in, tokens_out=tok_out,
-                      faithfulness_score=round(worst_faith, 3),
-                      payload=_json.dumps({"extract_confidence": extract_confidence,
-                                           "extractor": extracted.extractor}))
+                      faithfulness_score=round(worst_faith, 3))
+        # MERGE (don't replace) so filename / pages_total survive for the Jobs view
+        db.merge_job_payload(job_id, {"extract_confidence": extract_confidence,
+                                      "extractor": extracted.extractor})
         db.clear_page_results(job_id)   # success → drop per-page checkpoints
     # event for webhooks
     try:

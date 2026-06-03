@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search, Map, Shield, LogOut, Brain, Network } from "lucide-react";
+import { Search, Map, Shield, LogOut, Brain, Network, ListChecks } from "lucide-react";
 import { api, auth, AuthStatus, Me } from "./lib/api";
 import { Button, Toasts, toast } from "./components/ui";
 import { Login } from "./components/Login";
@@ -10,11 +10,13 @@ import { AtlasPanel } from "./components/Atlas";
 import { GraphPanel } from "./components/Graph";
 import { AdminPanel } from "./components/Admin";
 import { MemoryPanel } from "./components/Memory";
+import { JobsPanel } from "./components/JobsPanel";
 import { Jobs, JobInfo } from "./components/Jobs";
 
 type View =
   | { t: "empty" } | { t: "doc"; id: number } | { t: "section"; id: number }
-  | { t: "search" } | { t: "atlas" } | { t: "graph" } | { t: "memory" } | { t: "admin" };
+  | { t: "search" } | { t: "atlas" } | { t: "graph" } | { t: "memory" }
+  | { t: "jobs" } | { t: "admin" };
 
 export default function App() {
   const [view, setView] = useState<View>({ t: "empty" });
@@ -93,6 +95,7 @@ export default function App() {
         <Button className={navBtn(view.t === "atlas")} onClick={() => setView({ t: "atlas" })}><Map className="w-4 h-4" /> Atlas</Button>
         <Button className={navBtn(view.t === "graph")} onClick={() => setView({ t: "graph" })}><Network className="w-4 h-4" /> Graph</Button>
         <Button className={navBtn(view.t === "memory")} onClick={() => setView({ t: "memory" })}><Brain className="w-4 h-4" /> Memory</Button>
+        <Button className={navBtn(view.t === "jobs")} onClick={() => setView({ t: "jobs" })}><ListChecks className="w-4 h-4" /> Processing</Button>
         {isAdmin && <Button className={navBtn(view.t === "admin")} onClick={() => setView({ t: "admin" })}><Shield className="w-4 h-4" /> Admin</Button>}
         <span className="muted text-xs ml-1">{me?.email || me?.via} · {me?.role}</span>
         <Button onClick={doLogout} title="Log out"><LogOut className="w-4 h-4" /></Button>
@@ -117,6 +120,7 @@ export default function App() {
         {view.t === "atlas" && <AtlasPanel onOpenDoc={(id) => setView({ t: "doc", id })} />}
         {view.t === "graph" && <GraphPanel onOpenDoc={(id) => setView({ t: "doc", id })} canWrite={canWrite} />}
         {view.t === "memory" && <MemoryPanel canWrite={canWrite} />}
+        {view.t === "jobs" && <JobsPanel onOpenDoc={(id) => setView({ t: "doc", id })} />}
         {view.t === "admin" && isAdmin && <AdminPanel />}
       </div>
 
