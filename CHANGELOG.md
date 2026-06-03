@@ -129,6 +129,12 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   faithfulness eval).
 
 ### Fixes (resilience & performance)
+- **True per-page PDF extraction (critical).** The Tika path collapsed a whole PDF into
+  one "logical page" (Tika gives no reliable page breaks), so an 84-page book became a
+  single ~140k-token LLM call (summarized) and figures were only detected on page 1. PDFs
+  with a text layer are now extracted **page by page via PyMuPDF** (each page keeps its
+  own text + its own figures); scanned PDFs get per-page OCR via the fallback. Non-PDF
+  formats still go through Tika.
 - **Content-preservation guarantee (critical).** LLM structuring could silently drop
   most of a document — an 84-page book collapsed to ~7 pages because an over-eager model
   summarized pages (or judged noisy scans as "noise → empty"); the pipeline only logged

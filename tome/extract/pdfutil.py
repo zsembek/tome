@@ -16,6 +16,26 @@ def page_count(pdf_bytes: bytes) -> int:
     return n
 
 
+def page_texts(pdf_bytes: bytes) -> list[str]:
+    """Per-page text from the PDF's text layer (digital PDFs). Empty strings for
+    pages without a text layer (scanned) — those are routed to OCR downstream."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return [(doc[i].get_text("text") or "") for i in range(doc.page_count)]
+    finally:
+        doc.close()
+
+
+def pdf_metadata(pdf_bytes: bytes) -> dict:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        m = doc.metadata or {}
+        return {"title": m.get("title", "") or "", "author": m.get("author", "") or "",
+                "content_type": "application/pdf"}
+    finally:
+        doc.close()
+
+
 def render_page_png(pdf_bytes: bytes, page_index0: int, dpi: int = RENDER_DPI) -> bytes:
     """Render an entire page to PNG (for reading with a vision model)."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
