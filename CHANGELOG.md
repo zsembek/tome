@@ -128,6 +128,15 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   (Markdown backup of every document). Admin gained a **Health** tab (usage + corpus
   faithfulness eval).
 
+### Folders: no orphaned documents
+- **Deleting a non-empty folder is refused** (409) — including a parent whose *subfolder*
+  holds documents (counted over the ltree subtree). The UI shows a clear message; move or
+  delete the documents first. Previously delete cascaded and orphaned the documents
+  (`folder_id → NULL`) with no way to re-file them.
+- **Unfiled documents are surfaced** (`GET /v1/unfiled` + an "Unfiled" section in the
+  sidebar) and can be **drag-and-dropped** back into any folder (the tree already supports
+  dragging documents between folders).
+
 ### Processing / Jobs view
 - **Durable Processing view** (`GET /v1/jobs` + a Library UI "Processing" tab): every
   ingestion job listed per file with live status, stage, **per-page progress**

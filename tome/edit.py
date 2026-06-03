@@ -313,6 +313,12 @@ def move_folder(db: DB, folder_id: int, new_parent_id: int | None):
 
 
 def delete_folder(db: DB, folder_id: int):
+    # Refuse to delete a folder that (or whose subfolders) still contain documents —
+    # otherwise the documents would be orphaned (folder_id → NULL). Move/delete them first.
+    n_docs = db.count_documents_in_subtree(folder_id)
+    if n_docs > 0:
+        raise ValueError(f"folder is not empty: it (or a subfolder) contains {n_docs} "
+                         f"document(s). Move or delete them first.")
     with db.pool.connection() as conn:
         with conn.transaction(), conn.cursor() as cur:
             # purge assets of the subtree's documents

@@ -111,6 +111,7 @@ export const docs = {
   rename: (id: number, title: string) => api.patch(`/documents/${id}`, { title }),
   remove: (id: number) => api.del(`/documents/${id}`),
   downloadSource: (id: number, filename: string) => api.download(`/documents/${id}/source`, filename),
+  unfiled: (): Promise<{ documents: Doc[] }> => api.get("/unfiled"),
 };
 
 export interface Job {

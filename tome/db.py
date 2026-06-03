@@ -205,6 +205,27 @@ class DB:
                            LIMIT %s OFFSET %s""", (folder_id, limit, offset))
             return list(cur.fetchall())
 
+    def count_documents_in_subtree(self, folder_id: int) -> int:
+        """Documents in this folder OR any descendant folder (ltree subtree)."""
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""WITH t AS (SELECT workspace_id, path FROM folders WHERE id=%s)
+                           SELECT count(*)::int n FROM documents d
+                           WHERE d.folder_id IN (
+                               SELECT f.id FROM folders f, t
+                               WHERE f.workspace_id = t.workspace_id AND f.path <@ t.path)""",
+                        (folder_id,))
+            row = cur.fetchone()
+            return row["n"] if row else 0
+
+    def list_unfiled_documents(self, ws: int, limit: int = 500) -> list[dict]:
+        """Documents not attached to any folder (e.g. orphaned by a folder move/delete)."""
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT id, folder_id, title, summary, tags, parts, section_count,
+                                  total_chars, language, status, faithfulness_score, updated_at
+                           FROM documents WHERE workspace_id=%s AND folder_id IS NULL
+                           ORDER BY title LIMIT %s""", (ws, limit))
+            return list(cur.fetchall())
+
     def find_document(self, ws: int, folder_id: int | None, filename: str) -> dict | None:
         with self.pool.connection() as conn, conn.cursor() as cur:
             if folder_id is None:

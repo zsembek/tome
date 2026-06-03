@@ -599,8 +599,19 @@ def move_folder_ep(folder_id: int, new_parent_id: int | None = Body(None, embed=
 
 @app.delete("/v1/folders/{folder_id}", dependencies=[Depends(require_auth)])
 def remove_folder(folder_id: int):
-    ed.delete_folder(get_db(), folder_id)
+    try:
+        ed.delete_folder(get_db(), folder_id)
+    except ValueError as e:
+        # not empty (contains documents in it or a subfolder) → 409, with a clear message
+        raise HTTPException(409, str(e))
     return {"deleted": folder_id}
+
+
+@app.get("/v1/unfiled", dependencies=[Depends(require_auth)])
+def unfiled_documents():
+    """Documents not attached to any folder (e.g. orphaned by an earlier folder delete).
+    Surface them so they can be drag-and-dropped back into a folder."""
+    return {"documents": get_db().list_unfiled_documents(current_workspace())}
 
 
 # ─────────────────────────── Assets ────────────────────────────

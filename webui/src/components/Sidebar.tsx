@@ -29,10 +29,14 @@ export function Sidebar({ onOpenDoc, refreshKey, onUpload, canWrite = true, sele
   const [renaming, setRenaming] = useState<number | null>(null);
   const [renameVal, setRenameVal] = useState("");
   const [dropTarget, setDropTarget] = useState<number | "root" | null>(null);
+  const [unfiled, setUnfiled] = useState<Doc[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function loadRoots() {
     try { setRoots((await fapi.roots()).folders); } catch (e: any) { toast(e?.message || "load failed", "err"); }
+  }
+  async function loadUnfiled() {
+    try { setUnfiled((await dapi.unfiled()).documents); } catch { /* ignore */ }
   }
   async function loadNode(id: number) {
     try {
@@ -43,7 +47,7 @@ export function Sidebar({ onOpenDoc, refreshKey, onUpload, canWrite = true, sele
   }
   function refreshNode(parentId: number | null) { parentId == null ? loadRoots() : loadNode(parentId); }
 
-  useEffect(() => { loadRoots(); setChildren({}); setDocs({}); }, [refreshKey]);
+  useEffect(() => { loadRoots(); loadUnfiled(); setChildren({}); setDocs({}); }, [refreshKey]);
 
   async function expand(f: Folder, force?: boolean) {
     const next = force ?? !open[f.id];
@@ -78,6 +82,7 @@ export function Sidebar({ onOpenDoc, refreshKey, onUpload, canWrite = true, sele
       await dapi.move(docId, folderId);
       if (fromFolder != null) loadNode(fromFolder);
       loadNode(folderId); setOpen((o) => ({ ...o, [folderId]: true }));
+      loadUnfiled();   // the doc may have come from the Unfiled bucket
       toast("Document moved");
     } catch (e: any) { toast(e?.message || "move failed", "err"); }
   }
@@ -206,6 +211,21 @@ export function Sidebar({ onOpenDoc, refreshKey, onUpload, canWrite = true, sele
           : roots.length === 0 ? <div className="muted text-sm px-1">No folders yet. Create one or upload a file.</div>
             : roots.map((f) => <Row key={`f${f.id}`} f={{ ...f, parent_id: null }} depth={0} />)}
       </div>
+
+      {unfiled.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-line">
+          <div className="muted text-xs uppercase tracking-wide mb-1 px-1">Unfiled ({unfiled.length})</div>
+          {unfiled.map((d) => (
+            <div key={`u${d.id}`} draggable={canWrite}
+              onDragStart={(e) => { e.dataTransfer.setData("tome/doc", String(d.id)); e.dataTransfer.setData("tome/doc-folder", ""); }}
+              className={`px-1.5 py-1 rounded cursor-pointer truncate flex items-center gap-1 ${openDocId === d.id ? "bg-acc/15 text-acc" : "text-mut hover:bg-[#1e252e] hover:text-fg"}`}
+              onClick={() => onOpenDoc(d.id)} title={canWrite ? "drag onto a folder to file it" : ""}>
+              <FileText className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{d.title}</span>
+            </div>
+          ))}
+          {canWrite && <div className="muted text-[10px] px-1 mt-1">drag a document onto a folder to file it</div>}
+        </div>
+      )}
     </aside>
   );
 }
