@@ -1,0 +1,6 @@
+# Build artifacts + deps are produced INSIDE the image — never send them in the build
+# context (the local dist/ can also carry filesystem modes BuildKit can't checksum).
+node_modules
+dist
+.vite
+*.log
