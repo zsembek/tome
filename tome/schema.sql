@@ -172,6 +172,22 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS ix_jobs_status ON ingestion_jobs (status);
+-- retry budget for resumable processing (added to existing DBs too)
+ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+
+-- ── Per-page checkpoints (resume a large document from where it stopped) ──────
+-- Each page of a document is a unit of work bound to its ingestion job. As a page is
+-- structured (text + figures → Markdown) its result is saved here; on retry the worker
+-- skips pages already done and continues. Cleared once the document is stored.
+CREATE TABLE IF NOT EXISTS ingestion_page_results (
+    job_id       BIGINT NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    page_number  INT NOT NULL,
+    content      TEXT NOT NULL DEFAULT '',     -- the page's clean Markdown
+    assets       JSONB NOT NULL DEFAULT '[]',  -- figures stored for this page
+    faithfulness REAL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (job_id, page_number)
+);
 
 -- ── Assets (originals + images) ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS assets (

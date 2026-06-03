@@ -129,6 +129,13 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   faithfulness eval).
 
 ### Fixes (resilience & performance)
+- **Resumable ingestion (per-page checkpoints).** Large documents are processed page by
+  page, and each page's result is checkpointed (`ingestion_page_results`). If a job fails
+  mid-document it is retried (bounded budget) and **resumes from the last completed page**
+  instead of restarting from page 1 — and the staged bytes + checkpoints are kept across
+  retries (previously the bytes were deleted on error, making resume impossible).
+- **Original file now linked.** `source_object_key` is persisted on the document (it was
+  always empty), so stored originals can be reprocessed/`reindex`ed.
 - **True per-page PDF extraction (critical).** The Tika path collapsed a whole PDF into
   one "logical page" (Tika gives no reliable page breaks), so an 84-page book became a
   single ~140k-token LLM call (summarized) and figures were only detected on page 1. PDFs

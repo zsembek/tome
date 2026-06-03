@@ -24,13 +24,14 @@ def store_document_atomic(db: DB, *, workspace_id: int, folder_id: int | None,
             # document (upsert on content_hash match — the skip is done upstream)
             cur.execute("""INSERT INTO documents
                 (workspace_id, folder_id, title, summary, tags, source_filename, mime_type,
-                 extractor, language, parts, section_count, total_chars, content_hash,
-                 pipeline_version, faithfulness_score, status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ready')
+                 source_object_key, extractor, language, parts, section_count, total_chars,
+                 content_hash, pipeline_version, faithfulness_score, status)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ready')
                 RETURNING id""",
                 (workspace_id, folder_id, meta["title"], meta.get("summary", ""),
                  meta.get("tags", []), meta.get("source_filename", ""),
-                 meta.get("mime_type", ""), meta.get("extractor", ""), language,
+                 meta.get("mime_type", ""), meta.get("source_object_key", ""),
+                 meta.get("extractor", ""), language,
                  len(parts), len(sections), sum(len(p) for p in parts),
                  meta.get("content_hash", ""), meta.get("pipeline_version", ""),
                  meta.get("faithfulness_score")))

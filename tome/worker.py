@@ -54,6 +54,9 @@ def process_outbox(db: DB) -> int:
     return n
 
 
+MAX_ATTEMPTS = 3   # bounded retry budget; each retry resumes from the last good page
+
+
 def run_once(db: DB) -> bool:
     job = db.next_queued_job()
     if not job:
@@ -62,6 +65,7 @@ def run_once(db: DB) -> bool:
     binp, metap = _STAGE / f"{jid}.bin", _STAGE / f"{jid}.meta"
     if not binp.exists():
         db.update_job(jid, status="error", error="staged file missing")
+        db.clear_page_results(jid)
         return True
     try:
         data = binp.read_bytes()
@@ -73,10 +77,17 @@ def run_once(db: DB) -> bool:
                auto_file=(autof == "1"), job_id=jid)
     except Exception as exc:
         log.exception("job %s failed", jid)
-        db.update_job(jid, status="error", error=str(exc)[:2000])
-    finally:
-        # ALWAYS clean up the stage (even on error) — otherwise the volume accumulates junk
-        binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)
+        attempts = db.bump_job_attempts(jid)
+        if attempts >= MAX_ATTEMPTS:
+            db.update_job(jid, status="error", error=f"failed after {attempts} attempts: {exc}"[:2000])
+            db.clear_page_results(jid)
+            binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)
+        else:
+            # keep staged bytes + per-page checkpoints → next pickup RESUMES from the failed page
+            db.update_job(jid, status="queued", stage="retry", error=f"retry {attempts}: {exc}"[:2000])
+        return True
+    # success: ingest already marked the job done — clean up the stage
+    binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)
     return True
 
 

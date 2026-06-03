@@ -78,32 +78,24 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     extract_confidence = round(sum(page_confidences) / len(page_confidences), 3) if page_confidences else None
 
     n_pages = max(1, len(extracted.pages))
-    for pi, page in enumerate(extracted.pages):
-        # finer-grained progress across the structure stage (0.30 → 0.55)
-        progress("structure", round(0.30 + 0.25 * (pi / n_pages), 3))
-        raw = page.text or ""
-        raw_pages.append(raw)
-        # insert figure tokens (vision will substitute descriptions)
-        fig_map: dict[str, Figure] = {}
-        for fig in page.figures:
-            token = _FIG_TOKEN.format(n=fig_counter)
-            raw = raw + f"\n\n{token}\n"
-            fig_map[token] = fig
-            fig_counter += 1
+    is_pdf = (mime == "application/pdf") or filename.lower().endswith(".pdf")
+    # resume: page results already completed in a previous (failed) attempt of this job
+    page_results = db.get_page_results(job_id) if job_id else {}
 
-        md, ti, to = structure_page(raw, cfg, tlang)
+    def _process_page(raw_with_tokens: str, page, fig_map: dict) -> tuple[str, list, float]:
+        """Structure ONE page (text + figures → Markdown). Returns (md, page_assets, faith)."""
+        nonlocal tok_in, tok_out
+        md, ti, to = structure_page(raw_with_tokens, cfg, tlang)
         tok_in += ti; tok_out += to
-
-        # verify (faithfulness) — on substantive text
-        if raw.strip():
+        faith = 1.0
+        if raw_with_tokens.strip():
             rep = verify(page.text or "", md, min_score=cfg.faithfulness_min, target_lang=tlang)
             if not rep.passed and cfg.structure_smart:
-                # escalation: full LLM pass without the smart skip
                 from tome.llm import get_llm
                 from tome.prompts import load_prompt
                 try:
                     res = get_llm(cfg).chat(system=load_prompt("structure", TARGET_LANG=tlang),
-                                            user=raw, model=cfg.llm_structure_model,
+                                            user=raw_with_tokens, model=cfg.llm_structure_model,
                                             max_tokens=cfg.llm_max_completion_tokens)
                     md2 = res.text.strip(); tok_in += res.tokens_in; tok_out += res.tokens_out
                     rep2 = verify(page.text or "", md2, min_score=cfg.faithfulness_min, target_lang=tlang)
@@ -111,21 +103,17 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                         md, rep = md2, rep2
                 except Exception as exc:
                     log.warning("structure escalation failed: %s", exc)
-            # CONTENT-PRESERVATION GUARANTEE: structuring must never silently drop a page.
-            # If the output is drastically shorter than the source (over-eager summary,
-            # a noisy scan judged as "noise → empty", or a reasoning model truncating),
-            # keep the RAW extracted text verbatim — a faithful page beats a pretty fragment.
+            # CONTENT-PRESERVATION GUARANTEE: never let structuring drop a page — if the
+            # output is drastically shorter than the source, keep the RAW text verbatim.
             src_len = len((page.text or "").strip())
             if src_len > 200 and len(md.strip()) < cfg.structure_min_length_ratio * src_len:
-                log.warning("page %d: structured output too short (%d vs %d chars) — keeping raw text",
-                            pi + 1, len(md.strip()), src_len)
-                md = raw
+                log.warning("page %d: structured output too short — keeping raw text", page.number)
+                md = raw_with_tokens
                 rep = verify(page.text or "", md, min_score=cfg.faithfulness_min, target_lang=tlang)
-            worst_faith = min(worst_faith, rep.score)
-
-        # vision: classify, describe informative ones, store PNG in the store
-        is_pdf = (mime == "application/pdf") or filename.lower().endswith(".pdf")
-        for n, (token, fig) in enumerate(fig_map.items()):
+            faith = rep.score
+        # figures: crop → classify/describe → store PNG → embed in Markdown
+        page_assets: list[dict] = []
+        for fn, (token, fig) in enumerate(fig_map.items()):
             block = "\n\n"
             if is_pdf:
                 try:
@@ -133,20 +121,46 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                     if png:
                         v = classify_and_describe(png, cfg, tlang)
                         if v.get("informative"):
-                            key = f"figures/{doc_key}/p{fig.page_number}_{n}.png"
+                            key = f"figures/{doc_key}/p{fig.page_number}_{fn}.png"
                             store.put(key, png, "image/png")
-                            pending_assets.append({"kind": "figure", "object_key": key,
-                                                   "fig_class": v.get("fig_class"),
-                                                   "mime": "image/png", "sha": sha256(png)})
+                            page_assets.append({"kind": "figure", "object_key": key,
+                                                "fig_class": v.get("fig_class"),
+                                                "mime": "image/png", "sha": sha256(png)})
                             desc = v.get("description", "")
                             alt = (fig.caption or desc or "figure")[:80]
-                            block = (f"\n\n![{alt}](/v1/assets/{key})\n\n"
-                                     f"> **Figure:** {desc}\n\n" if desc
-                                     else f"\n\n![{alt}](/v1/assets/{key})\n\n")
+                            block = (f"\n\n![{alt}](/v1/assets/{key})\n\n> **Figure:** {desc}\n\n"
+                                     if desc else f"\n\n![{alt}](/v1/assets/{key})\n\n")
                 except Exception as exc:
                     log.debug("vision fig fail: %s", exc)
             md = md.replace(token, block)
+        return md, page_assets, faith
+
+    for pi, page in enumerate(extracted.pages):
+        # finer-grained progress across the structure stage (0.30 → 0.55)
+        progress("structure", round(0.30 + 0.25 * (pi / n_pages), 3))
+        raw = page.text or ""
+        raw_pages.append(raw)
+        # insert figure tokens (vision substitutes descriptions)
+        fig_map: dict[str, Figure] = {}
+        for fig in page.figures:
+            token = _FIG_TOKEN.format(n=fig_counter)
+            raw = raw + f"\n\n{token}\n"
+            fig_map[token] = fig
+            fig_counter += 1
+
+        ck = page_results.get(page.number)
+        if ck is not None:                       # RESUME: reuse the already-completed page
+            page_mds.append(ck["content"])
+            pending_assets.extend(ck.get("assets") or [])
+            worst_faith = min(worst_faith, ck["faithfulness"] if ck["faithfulness"] is not None else 1.0)
+            continue
+
+        md, page_assets, faith = _process_page(raw, page, fig_map)
+        worst_faith = min(worst_faith, faith)
+        pending_assets.extend(page_assets)
         page_mds.append(md)
+        # checkpoint this page so a later failure resumes from here, not from page 1
+        db.save_page_result(job_id, page.number, md, page_assets, round(faith, 3))
 
     full_md = clean("\n\n".join(page_mds))
 
@@ -176,6 +190,7 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     meta = derive_metadata(full_md, cfg, tlang, existing, filename)
     if title_override:
         meta["title"] = title_override   # honor a caller-supplied title (ready-Markdown ingest)
+    meta["source_object_key"] = src_key  # persist the link to the stored original (enables reindex)
     # prefer the language detected by the extractor's AI pre-analysis (the OCR was tuned
     # to it), then naming, then a script-based guess
     detected_lang = (extracted.metadata.get("language") or "").strip()
@@ -201,6 +216,7 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
             if job_id:
                 db.update_job(job_id, status="done", stage="unchanged", progress=1.0,
                               document_id=existing["id"])
+                db.clear_page_results(job_id)
             return existing["id"]
         if db.manual_edit_count(existing["id"]) > 0:
             # manual edits exist → do NOT overwrite silently: pending version + diff for confirmation
@@ -218,6 +234,7 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                               document_id=existing["id"],
                               payload={"conflict": True, "pending_version": vno,
                                        "snapshot_key": snap_key})
+                db.clear_page_results(job_id)
             return existing["id"]
         # no manual edits → safe to replace (delete the old one, recreate)
         from tome.edit import delete_document as _del
@@ -291,6 +308,7 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                       faithfulness_score=round(worst_faith, 3),
                       payload=_json.dumps({"extract_confidence": extract_confidence,
                                            "extractor": extracted.extractor}))
+        db.clear_page_results(job_id)   # success → drop per-page checkpoints
     # event for webhooks
     try:
         db.emit_event(workspace_id, "document.ready",

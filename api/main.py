@@ -862,10 +862,11 @@ def _worker_loop():
             jid = job["id"]
             binp = _STAGE / f"{jid}.bin"
             metap = _STAGE / f"{jid}.meta"
+            if not binp.exists():
+                db.update_job(jid, status="error", error="staged file missing")
+                db.clear_page_results(jid)
+                continue
             try:
-                if not binp.exists():
-                    db.update_job(jid, status="error", error="staged file missing")
-                    continue
                 data = binp.read_bytes()
                 fn, mime, folder, autof, fid = (
                     metap.read_text(encoding="utf-8").split("\n") + ["", "", "", "0", ""])[:5]
@@ -873,13 +874,17 @@ def _worker_loop():
                        filename=fn, mime=mime, folder_path=(folder or None),
                        folder_id=(int(fid) if fid.strip() else None),
                        auto_file=(autof == "1"), job_id=jid)
-            finally:
-                binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)
+                binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)   # success → cleanup
+            except Exception as exc:
+                # bounded retry that RESUMES from the last completed page (checkpoints + bytes kept)
+                log.exception("worker error on job %s: %s", jid, exc)
+                attempts = db.bump_job_attempts(jid)
+                if attempts >= 3:
+                    db.update_job(jid, status="error", error=f"failed after {attempts} attempts: {exc}"[:2000])
+                    db.clear_page_results(jid)
+                    binp.unlink(missing_ok=True); metap.unlink(missing_ok=True)
+                else:
+                    db.update_job(jid, status="queued", stage="retry", error=f"retry {attempts}: {exc}"[:2000])
         except Exception as exc:
-            log.exception("worker error: %s", exc)
-            if jid is not None:
-                try:
-                    db.update_job(jid, status="error", error=str(exc)[:2000])
-                except Exception:
-                    pass
+            log.exception("worker loop error: %s", exc)
             time.sleep(2)

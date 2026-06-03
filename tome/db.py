@@ -595,6 +595,47 @@ class DB:
                                 (row["id"],))
                 return row
 
+    # ── per-page checkpoints (resumable ingestion) ──
+    def get_page_results(self, job_id: int) -> dict[int, dict]:
+        """Completed page results for a job → {page_number: {content, assets, faithfulness}}."""
+        if not job_id:
+            return {}
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT page_number, content, assets, faithfulness
+                           FROM ingestion_page_results WHERE job_id=%s""", (job_id,))
+            return {r["page_number"]: {"content": r["content"],
+                                       "assets": r["assets"] if isinstance(r["assets"], list)
+                                       else [], "faithfulness": r["faithfulness"]}
+                    for r in cur.fetchall()}
+
+    def save_page_result(self, job_id: int, page_number: int, content: str,
+                         assets: list, faithfulness: float | None):
+        import json
+        if not job_id:
+            return
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""INSERT INTO ingestion_page_results
+                           (job_id, page_number, content, assets, faithfulness)
+                           VALUES (%s,%s,%s,%s,%s)
+                           ON CONFLICT (job_id, page_number) DO UPDATE
+                           SET content=EXCLUDED.content, assets=EXCLUDED.assets,
+                               faithfulness=EXCLUDED.faithfulness""",
+                        (job_id, page_number, content, json.dumps(assets), faithfulness))
+
+    def clear_page_results(self, job_id: int):
+        if not job_id:
+            return
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM ingestion_page_results WHERE job_id=%s", (job_id,))
+
+    def bump_job_attempts(self, job_id: int) -> int:
+        """Increment + return the job's attempt counter (for a bounded retry budget)."""
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("UPDATE ingestion_jobs SET attempts=attempts+1 WHERE id=%s RETURNING attempts",
+                        (job_id,))
+            row = cur.fetchone()
+            return row["attempts"] if row else 0
+
     def requeue_stale_jobs(self, minutes: int = 30) -> int:
         """Jobs in 'running' for longer than N minutes (worker crashed/hung) → back to 'queued'.
         Without this, dead imports hang forever. Returns the number requeued."""
