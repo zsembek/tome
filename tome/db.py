@@ -433,9 +433,55 @@ class DB:
             cur.execute("SELECT id, url, events FROM webhooks WHERE workspace_id=%s ORDER BY id", (ws,))
             return list(cur.fetchall())
 
+    def get_webhook(self, ws: int, wid: int) -> dict | None:
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, url, events, secret FROM webhooks WHERE id=%s AND workspace_id=%s",
+                        (wid, ws))
+            return cur.fetchone()
+
     def delete_webhook(self, ws: int, wid: int):
         with self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM webhooks WHERE id=%s AND workspace_id=%s", (wid, ws))
+
+    # ── audit log ──
+    def add_audit(self, ws: int, actor: str, action: str, detail: str = ""):
+        try:
+            with self.pool.connection() as conn, conn.cursor() as cur:
+                cur.execute("""INSERT INTO audit_log (workspace_id, actor, action, detail)
+                               VALUES (%s,%s,%s,%s)""", (ws, actor or "", action, (detail or "")[:1000]))
+        except Exception as exc:
+            log.debug("audit write failed: %s", exc)
+
+    def list_audit(self, ws: int, limit: int = 200) -> list[dict]:
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT id, actor, action, detail, created_at FROM audit_log
+                           WHERE workspace_id=%s ORDER BY id DESC LIMIT %s""", (ws, limit))
+            return list(cur.fetchall())
+
+    # ── stats (Health dashboard) ──
+    def stats(self, ws: int) -> dict:
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            def scalar(sql, params):
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                return list(row.values())[0] if row else 0
+            s = {
+                "documents": scalar("SELECT count(*) FROM documents WHERE workspace_id=%s", (ws,)),
+                "folders": scalar("SELECT count(*) FROM folders WHERE workspace_id=%s", (ws,)),
+                "sections": scalar("SELECT count(*) FROM sections s JOIN documents d ON d.id=s.document_id WHERE d.workspace_id=%s", (ws,)),
+                "retrieval_chunks": scalar("SELECT count(*) FROM retrieval_chunks c JOIN documents d ON d.id=c.document_id WHERE d.workspace_id=%s", (ws,)),
+                "graph_entities": scalar("SELECT count(*) FROM graph_entities WHERE workspace_id=%s", (ws,)),
+                "memories": scalar("SELECT count(*) FROM agent_memory WHERE workspace_id=%s AND superseded_by IS NULL", (ws,)),
+                "users": scalar("SELECT count(*) FROM users WHERE workspace_id=%s", (ws,)),
+                "api_keys": scalar("SELECT count(*) FROM api_keys WHERE workspace_id=%s", (ws,)),
+                "webhooks": scalar("SELECT count(*) FROM webhooks WHERE workspace_id=%s", (ws,)),
+                "total_chars": scalar("SELECT COALESCE(SUM(total_chars),0) FROM documents WHERE workspace_id=%s", (ws,)),
+                "tokens_in": scalar("SELECT COALESCE(SUM(tokens_in),0) FROM ingestion_jobs WHERE workspace_id=%s", (ws,)),
+                "tokens_out": scalar("SELECT COALESCE(SUM(tokens_out),0) FROM ingestion_jobs WHERE workspace_id=%s", (ws,)),
+            }
+            cur.execute("SELECT status, count(*) n FROM ingestion_jobs WHERE workspace_id=%s GROUP BY status", (ws,))
+            s["jobs"] = {r["status"]: r["n"] for r in cur.fetchall()}
+            return s
 
     # ── users / sessions (identity) ──
     def count_users(self) -> int:

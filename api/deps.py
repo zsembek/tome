@@ -128,6 +128,16 @@ def current_token(authorization: str | None = Header(default=None)) -> str:
     return _token(authorization)
 
 
+def actor_label(authorization: str | None = Header(default=None)) -> str:
+    """A short label for who is performing an action (for the audit log)."""
+    tok = _token(authorization)
+    if tok:
+        sess = get_db().verify_session(tok)
+        if sess:
+            return sess.get("email") or "user"
+    return "open" if get_config().tome_open else "service"
+
+
 def current_agent_id(x_agent_id: str | None = Header(default=None, alias="X-Agent-Id"),
                      agent_id: str | None = None) -> str:
     """Resolve the agent identity for memory ops: `X-Agent-Id` header (preferred),

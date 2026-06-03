@@ -171,7 +171,18 @@ export const memory = {
     api.get(`/memory${_q({ tier, agent_id: agentId, limit: "200" })}`),
   recall: (q: string, agentId = ""): Promise<{ results: MemoryItem[] }> =>
     api.get(`/memory/recall${_q({ q, agent_id: agentId, top_k: "20" })}`),
+  remember: (content: string, tier: string, scope: string, agentId = "") =>
+    api.post(`/memory${_q({ agent_id: agentId })}`, { content, tier, scope, title: "" }),
+  get: (id: number): Promise<MemoryItem> => api.get(`/memory/${id}`),
   forget: (id: number) => api.del(`/memory/${id}`),
+};
+
+// ── Admin (stats / audit / webhook test) ────────────────────────
+export const admin = {
+  stats: (): Promise<any> => api.get("/stats"),
+  audit: (): Promise<{ events: { id: number; actor: string; action: string; detail: string; created_at: string }[] }> => api.get("/audit"),
+  webhookTest: (id: number): Promise<{ ok: boolean; status_code: number }> => api.post(`/webhooks/${id}/test`),
+  webhooks: (): Promise<{ webhooks: any[]; available_events: string[] }> => api.get("/webhooks"),
 };
 
 // ── Short-lived signed image URLs (instead of putting the token in the URL) ──

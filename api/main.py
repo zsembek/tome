@@ -18,8 +18,9 @@ from tome.pipeline.run import ingest
 from tome.store import hybrid_search
 from tome.storage import get_store
 from tome import edit as ed
-from api.deps import (current_agent_id, current_token, current_user, current_workspace,
-                      get_db, init_db, invalidate_scope_cache, require_admin, require_auth)
+from api.deps import (actor_label, current_agent_id, current_token, current_user,
+                      current_workspace, get_db, init_db, invalidate_scope_cache,
+                      require_admin, require_auth)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -686,6 +687,35 @@ def usage():
             "tokens_in": t["ti"], "tokens_out": t["to_"]}
 
 
+@app.get("/v1/stats", dependencies=[Depends(require_auth)])
+def stats():
+    """Comprehensive workspace stats for the Health dashboard: content counts, job
+    breakdown, token usage, configuration, pgvector, and corpus faithfulness."""
+    db = get_db(); cfg = get_config()
+    s = db.stats(current_workspace())
+    s["pgvector"] = db.has_vector()
+    s["schema_ready"] = db.schema_ready()
+    s["config"] = {
+        "llm_provider": cfg.llm_provider, "structure_enabled": cfg.structure_enabled,
+        "embed_provider": cfg.embed_provider, "embed_enabled": cfg.embed_enabled,
+        "extract_primary": cfg.extract_primary, "extract_fallback": cfg.extract_fallback,
+        "auto_language": cfg.extract_auto_lang, "graph_enabled": cfg.graph_enabled,
+        "memory_enabled": cfg.memory_enabled, "open_mode": cfg.tome_open,
+    }
+    try:
+        from tome.evalkit import corpus_faithfulness
+        s["faithfulness"] = corpus_faithfulness(db)
+    except Exception:
+        s["faithfulness"] = {}
+    return s
+
+
+@app.get("/v1/audit", dependencies=[Depends(require_admin)])
+def audit_log(limit: int = Query(200, ge=1, le=1000)):
+    """Security audit log (admin): logins, user/key/webhook changes."""
+    return {"events": get_db().list_audit(current_workspace(), limit)}
+
+
 # ─────────────────────────── Export ────────────────────────────
 def _disposition(name: str) -> str:
     """Content-Disposition with RFC 5987 for non-ASCII names (Cyrillic, etc.)."""
@@ -720,11 +750,16 @@ def export_folder(folder_id: int):
 
 # ─────────────────────────── Admin: API keys / webhooks ────────
 @app.post("/v1/api-keys", dependencies=[Depends(require_admin)])
-def create_api_key(scopes: list[str] = Body(["read"], embed=True)):
+def create_api_key(scopes: list[str] = Body(["read"], embed=True),
+                   actor: str = Depends(actor_label)):
     bad = set(scopes) - {"read", "write", "admin"}
     if bad:
         raise HTTPException(400, f"unknown scopes: {bad}")
-    kid, token = get_db().create_api_key(current_workspace(), scopes)
+    if not scopes:
+        raise HTTPException(400, "select at least one scope")
+    ws = current_workspace()
+    kid, token = get_db().create_api_key(ws, scopes)
+    get_db().add_audit(ws, actor, "apikey.create", f"id={kid} scopes={scopes}")
     return {"id": kid, "api_key": token, "scopes": scopes,
             "note": "this key is shown once — store it now"}
 
@@ -735,29 +770,75 @@ def list_api_keys():
 
 
 @app.delete("/v1/api-keys/{key_id}", dependencies=[Depends(require_admin)])
-def delete_api_key(key_id: int):
-    get_db().delete_api_key(current_workspace(), key_id)
+def delete_api_key(key_id: int, actor: str = Depends(actor_label)):
+    ws = current_workspace()
+    get_db().delete_api_key(ws, key_id)
+    get_db().add_audit(ws, actor, "apikey.delete", f"id={key_id}")
     invalidate_scope_cache()   # the deleted key must stop working immediately
     return {"deleted": key_id}
+
+
+# Events the system can emit (for the webhook UI to offer).
+WEBHOOK_EVENTS = ["document.ready", "document.deleted"]
 
 
 @app.post("/v1/webhooks", dependencies=[Depends(require_admin)])
 def create_webhook(url: str = Body(..., embed=True),
                    events: list[str] = Body(..., embed=True),
-                   secret: str = Body("", embed=True)):
-    wid = get_db().create_webhook(current_workspace(), url, events, secret)
+                   secret: str = Body("", embed=True),
+                   actor: str = Depends(actor_label)):
+    from tome.webhooks import is_safe_webhook_url, parse_allow_hosts
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(400, "url must be http(s)")
+    if not is_safe_webhook_url(url, allow_hosts=parse_allow_hosts(get_config().webhook_allow_hosts)):
+        raise HTTPException(400, "url is blocked (private/loopback/metadata address)")
+    if not events:
+        raise HTTPException(400, "select at least one event")
+    ws = current_workspace()
+    wid = get_db().create_webhook(ws, url, events, secret)
+    get_db().add_audit(ws, actor, "webhook.create", f"id={wid} url={url} events={events}")
     return {"id": wid, "url": url, "events": events}
 
 
 @app.get("/v1/webhooks", dependencies=[Depends(require_admin)])
 def list_webhooks():
-    return {"webhooks": get_db().list_webhooks(current_workspace())}
+    return {"webhooks": get_db().list_webhooks(current_workspace()),
+            "available_events": WEBHOOK_EVENTS}
 
 
 @app.delete("/v1/webhooks/{wid}", dependencies=[Depends(require_admin)])
-def delete_webhook(wid: int):
-    get_db().delete_webhook(current_workspace(), wid)
+def delete_webhook(wid: int, actor: str = Depends(actor_label)):
+    ws = current_workspace()
+    get_db().delete_webhook(ws, wid)
+    get_db().add_audit(ws, actor, "webhook.delete", f"id={wid}")
     return {"deleted": wid}
+
+
+@app.post("/v1/webhooks/{wid}/test", dependencies=[Depends(require_admin)])
+def test_webhook(wid: int, actor: str = Depends(actor_label)):
+    """Send a signed test delivery to the webhook NOW and report the result."""
+    import json as _json
+    import httpx
+    from tome.webhooks import is_safe_webhook_url, parse_allow_hosts, sign_webhook
+    w = get_db().get_webhook(current_workspace(), wid)
+    if not w:
+        raise HTTPException(404, "webhook not found")
+    allow = parse_allow_hosts(get_config().webhook_allow_hosts)
+    if not is_safe_webhook_url(w["url"], allow_hosts=allow):
+        raise HTTPException(400, "url is blocked (SSRF/unsafe)")
+    body = _json.dumps({"event": "test.ping", "message": "Tome test webhook",
+                        "webhook_id": wid}).encode("utf-8")
+    headers = {"Content-Type": "application/json", "X-Tome-Event": "test.ping"}
+    sig = sign_webhook(body, w.get("secret", ""))
+    if sig:
+        headers["X-Tome-Signature"] = sig
+    get_db().add_audit(current_workspace(), actor, "webhook.test", f"id={wid}")
+    try:
+        with httpx.Client(timeout=10) as c:
+            r = c.post(w["url"], content=body, headers=headers)
+        return {"ok": r.status_code < 400, "status_code": r.status_code}
+    except Exception as e:
+        raise HTTPException(502, f"delivery failed: {e}")
 
 
 # ─────────────────────────── Auth / Users ──────────────────────
@@ -780,6 +861,7 @@ def auth_bootstrap(email: str = Body(..., embed=True), password: str = Body(...,
         raise HTTPException(400, "password too short (min 8 chars)")
     user = db.create_user(current_workspace(), email, password, role="admin")
     token = db.create_session(user["id"], get_config().session_ttl_hours)
+    db.add_audit(current_workspace(), email, "auth.bootstrap", "first administrator created")
     return {"token": token, "user": {"email": user["email"], "role": user["role"]}}
 
 
@@ -788,8 +870,10 @@ def auth_login(email: str = Body(..., embed=True), password: str = Body(..., emb
     db = get_db()
     u = db.verify_login(current_workspace(), email, password)
     if not u:
+        db.add_audit(current_workspace(), email, "auth.login_failed", "invalid credentials")
         raise HTTPException(401, "invalid credentials")
     token = db.create_session(u["id"], get_config().session_ttl_hours)
+    db.add_audit(current_workspace(), u["email"], "auth.login", f"role={u['role']}")
     return {"token": token, "user": {"email": u["email"], "role": u["role"]}}
 
 
@@ -817,21 +901,24 @@ def list_users():
 
 @app.post("/v1/users", dependencies=[Depends(require_admin)])
 def create_user_ep(email: str = Body(...), password: str = Body(...),
-                   role: str = Body("viewer")):
+                   role: str = Body("viewer"), actor: str = Depends(actor_label)):
     import psycopg
     if len(password) < 8:
         raise HTTPException(400, "password too short (min 8 chars)")
     try:
-        return get_db().create_user(current_workspace(), email, password, role)
+        u = get_db().create_user(current_workspace(), email, password, role)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except psycopg.errors.UniqueViolation:
         raise HTTPException(409, "user with this email already exists")
+    get_db().add_audit(current_workspace(), actor, "user.create", f"{email} role={role}")
+    return u
 
 
 @app.patch("/v1/users/{uid}", dependencies=[Depends(require_admin)])
 def update_user_ep(uid: int, role: str | None = Body(None),
-                   password: str | None = Body(None), disabled: bool | None = Body(None)):
+                   password: str | None = Body(None), disabled: bool | None = Body(None),
+                   actor: str = Depends(actor_label)):
     db = get_db(); ws = current_workspace()
     if password is not None and len(password) < 8:
         raise HTTPException(400, "password too short (min 8 chars)")
@@ -841,16 +928,20 @@ def update_user_ep(uid: int, role: str | None = Body(None),
         db.update_user(ws, uid, role=role, password=password, disabled=disabled)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    changes = [k for k, v in (("role", role), ("password", password), ("disabled", disabled)) if v is not None]
+    db.add_audit(ws, actor, "user.update", f"uid={uid} changed={changes}"
+                 + (f" role={role}" if role else "") + (" password-reset" if password else ""))
     invalidate_scope_cache()   # role/disable/password change → re-resolve scopes now
     return {"updated": uid}
 
 
 @app.delete("/v1/users/{uid}", dependencies=[Depends(require_admin)])
-def delete_user_ep(uid: int):
+def delete_user_ep(uid: int, actor: str = Depends(actor_label)):
     db = get_db(); ws = current_workspace()
     if _last_active_admin(db, ws, uid):
         raise HTTPException(400, "cannot delete the last active admin")
     db.delete_user(ws, uid)
+    db.add_audit(ws, actor, "user.delete", f"uid={uid}")
     invalidate_scope_cache()
     return {"deleted": uid}
 

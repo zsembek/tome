@@ -250,6 +250,17 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_ws_email ON users (workspace_id, lower(email));
 CREATE INDEX IF NOT EXISTS ix_users_ws ON users (workspace_id);
 
+-- ── Audit log (security-relevant actions: logins, user/key/webhook changes) ──
+CREATE TABLE IF NOT EXISTS audit_log (
+    id           BIGSERIAL PRIMARY KEY,
+    workspace_id BIGINT NOT NULL,
+    actor        TEXT NOT NULL DEFAULT '',     -- email / 'service' / 'system'
+    action       TEXT NOT NULL,                -- login | user.create | apikey.delete | …
+    detail       TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_audit_ws ON audit_log (workspace_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id           BIGSERIAL PRIMARY KEY,
     user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

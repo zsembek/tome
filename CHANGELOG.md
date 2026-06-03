@@ -6,6 +6,23 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Admin & Memory overhaul
+- **Memory UI is fully functional**: a "New memory" composer (Markdown body + tier +
+  shared/agent scope) writes via `POST /v1/memory`; browse-by-tier, recall search,
+  Markdown rendering, and forget all work end-to-end.
+- **User administration**: admins can edit roles, enable/disable, delete, and **set/reset
+  another user's password** (`PATCH /v1/users/{id}` with `password`) from the UI.
+- **API keys** no longer auto-create on scope click — you pick read/write/admin scopes
+  and press **Create**; the secret is shown once. Chosen scopes are honored exactly.
+- **Webhooks redone**: choose target URL + secret + subscribed events (`document.ready`,
+  `document.deleted`), with URL/SSRF validation; per-row **Send test** delivers a signed
+  test event synchronously and reports the status code.
+- **Audit log** (`GET /v1/audit`, admin): key/webhook/user mutations and logins are
+  recorded with actor + action + detail, surfaced in an Admin → Logs tab.
+- **Rich Health** (`GET /v1/stats`): documents/folders/sections/chunks/entities/memories/
+  users/keys/webhooks counts, token usage, job-status breakdown, pgvector + schema-ready
+  flags, active provider config, and the latest faithfulness eval.
+
 ### Added
 - Test harness (`tests/conftest.py`) with fakes (LLM, embedder), a tmp object store,
   sample fixtures, and an integration `api_client`.
