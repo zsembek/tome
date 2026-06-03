@@ -323,11 +323,12 @@ class DB:
         """Enqueues webhook delivery in the outbox for all workspace subscribers of the event."""
         import json
         with self.pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT url FROM webhooks WHERE workspace_id=%s AND %s = ANY(events)",
+            cur.execute("SELECT url, secret FROM webhooks WHERE workspace_id=%s AND %s = ANY(events)",
                         (ws, event))
             for r in cur.fetchall():
                 cur.execute("INSERT INTO outbox (aggregate, op, payload) VALUES ('webhook','deliver',%s)",
-                            (json.dumps({"url": r["url"], "event": event, "body": body}),))
+                            (json.dumps({"url": r["url"], "event": event, "body": body,
+                                         "secret": r.get("secret", "")}),))
 
     # ── api-keys / webhooks (admin) ──
     def has_any_api_key(self) -> bool:
@@ -537,6 +538,17 @@ class DB:
         with self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT * FROM ingestion_jobs WHERE id=%s", (job_id,))
             return cur.fetchone()
+
+    def document_extract_confidence(self, doc_id: int) -> float | None:
+        """OCR/extract confidence reported by the latest completed ingest job."""
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT payload->>'extract_confidence' v FROM ingestion_jobs
+                           WHERE document_id=%s ORDER BY id DESC LIMIT 1""", (doc_id,))
+            row = cur.fetchone()
+        try:
+            return float(row["v"]) if row and row["v"] not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            return None
 
     def next_queued_job(self) -> dict | None:
         with self.pool.connection() as conn:

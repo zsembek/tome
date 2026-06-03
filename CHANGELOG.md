@@ -36,3 +36,23 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   pluggable reranker.
 - `docker-compose.local.yml` zero-egress overlay (Tika + local embedder + optional
   Ollama) and docs.
+
+### Sprint 2 — Security hardening
+- **MCP fail-closed**: binds to localhost unless `MCPO_API_KEY` is set or `TOME_OPEN=true`
+  (`mcp_server.launch`); no unauthenticated write tools exposed by default.
+- **Webhooks**: HMAC-SHA256 signing (`X-Tome-Signature`) + SSRF protection
+  (private/loopback/link-local/metadata IPs and non-http(s) blocked; optional allowlist).
+- **Rate limiting** (token bucket → 429) and an **upload size cap** (→ 413).
+- **Secure-by-default audit**: surfaces empty `TOME_SECRET` / default Postgres/MinIO
+  credentials; `TOME_STRICT=true` refuses to start on insecure config.
+- **Security test matrix**: RBAC scope enforcement (viewer/editor/admin), plus webhook
+  signing/SSRF, rate-limit, and audit unit tests.
+- CI: `ci-canary/**` + `workflow_dispatch` triggers and a nightly `extras` job that
+  runs the gated Docling/fastembed/reranker tests for real.
+- Surfaced `extract_confidence` on the document detail endpoint.
+
+### Branding & docs
+- Added the Tome logo (`assets/logo.svg` + PNGs, `webui/public/favicon.*`), wired the
+  favicon/apple-touch icon into the Library UI and used the mark in the UI header/login.
+- Polished the README (centered logo header, badges, highlights) for a production look.
+

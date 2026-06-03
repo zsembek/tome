@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, Search, Map, Shield, LogOut } from "lucide-react";
+import { Search, Map, Shield, LogOut } from "lucide-react";
 import { api, auth, AuthStatus, Me } from "./lib/api";
 import { Button } from "./components/ui";
 import { Login } from "./components/Login";
@@ -78,7 +78,7 @@ export default function App() {
   return (
     <div className="h-full flex flex-col">
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-line">
-        <BookOpen className="w-5 h-5 text-acc" />
+        <img src="/favicon.svg" alt="Tome" className="w-6 h-6" />
         <span className="font-semibold tracking-wide">TOME</span>
         <span className="pill">Library</span>
         <div className="flex-1" />

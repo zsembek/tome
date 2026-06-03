@@ -112,6 +112,12 @@ class Config:
     session_ttl_hours: int = field(default_factory=lambda: _i("SESSION_TTL_HOURS", 168))
     admin_email: str = field(default_factory=lambda: os.environ.get("TOME_ADMIN_EMAIL", ""))
     admin_password: str = field(default_factory=lambda: os.environ.get("TOME_ADMIN_PASSWORD", ""))
+    # ── Hardening ──
+    tome_strict: bool = field(default_factory=lambda: _b("TOME_STRICT", False))
+    rate_limit_per_min: int = field(default_factory=lambda: _i("RATE_LIMIT_PER_MIN", 120))
+    rate_limit_burst: int = field(default_factory=lambda: _i("RATE_LIMIT_BURST", 0))
+    max_upload_mb: int = field(default_factory=lambda: _i("MAX_UPLOAD_MB", 200))
+    webhook_allow_hosts: str = field(default_factory=lambda: os.environ.get("WEBHOOK_ALLOW_HOSTS", ""))
 
     @property
     def model_id(self) -> str:

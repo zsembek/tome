@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
     # ── startup ──
     db = init_db()
     cfg = get_config()
+    # security self-audit (raises in TOME_STRICT mode on insecure config)
+    from tome.security import enforce as _security_enforce
+    _security_enforce(cfg, log)
     # seed the first admin from env (only if there are no users yet)
     if cfg.admin_email and cfg.admin_password and db.count_users() == 0:
         try:
@@ -67,6 +70,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Tome", version="0.1.0",
               description="Agent-native knowledge OS — REST API", lifespan=lifespan)
+
+# ── Rate limiting (in-process token bucket; per worker) ──
+from api.ratelimit import RateLimiter  # noqa: E402
+_lcfg = get_config()
+_limiter = RateLimiter(_lcfg.rate_limit_per_min, _lcfg.rate_limit_burst)
+
+
+@app.middleware("http")
+async def _rate_limit_mw(request: Request, call_next):
+    if request.url.path == "/health" or request.method == "OPTIONS":
+        return await call_next(request)
+    key = request.headers.get("authorization") or (request.client.host if request.client else "anon")
+    if not _limiter.allow(key):
+        return JSONResponse({"detail": "rate limit exceeded"}, status_code=429,
+                            headers={"Retry-After": "1"})
+    return await call_next(request)
 
 
 # ─────────────────────────── Folders ───────────────────────────
@@ -108,6 +127,9 @@ async def upload_document(
     db = get_db()
     ws = current_workspace()
     data = await file.read()
+    cap = get_config().max_upload_mb * 1024 * 1024
+    if cap and len(data) > cap:
+        raise HTTPException(413, f"file too large (> {get_config().max_upload_mb} MB)")
     job_id = db.create_job(ws, {"filename": file.filename,
                                 "folder_path": folder_path, "auto_file": auto_file,
                                 "mime": file.content_type or ""})
@@ -136,9 +158,12 @@ def folder_documents(folder_id: int, limit: int = Query(200, ge=1, le=1000), off
 
 @app.get("/v1/documents/{doc_id}", dependencies=[Depends(require_auth)])
 def get_document(doc_id: int):
-    doc = get_db().get_document(doc_id)
+    db = get_db()
+    doc = db.get_document(doc_id)
     if not doc:
         raise HTTPException(404, "document not found")
+    doc = dict(doc)
+    doc["extract_confidence"] = db.document_extract_confidence(doc_id)
     return doc
 
 

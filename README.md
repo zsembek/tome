@@ -1,23 +1,44 @@
-# Tome — an agent-native knowledge OS
+<div align="center">
+
+<img src="assets/logo.png" alt="Tome logo" width="128" />
+
+# Tome
+
+**The agent-native knowledge OS** — turn messy documents (PDFs, scans, DOCX) into a
+clean, *verifiable*, **Markdown** knowledge base that LLMs and AI agents read, search,
+and curate.
 
 [![CI](https://github.com/zsembek/tome/actions/workflows/ci.yml/badge.svg)](https://github.com/zsembek/tome/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776ab.svg)
+![Postgres](https://img.shields.io/badge/postgres-pgvector%20%2B%20ltree-336791.svg)
+![MCP](https://img.shields.io/badge/MCP-read%20%2B%20write-7c3aed.svg)
 
-**Tome turns messy documents (PDFs, scans, DOCX) into a clean, structured,
-*verifiable* Markdown knowledge base that LLMs and AI agents can actually read —
-and that humans and agents can keep editing.** Self-hosted, open-source, any LLM,
-any embedder, no vector-store lock-in. One Postgres is the whole backbone.
+*Self-hosted · any LLM · any embedder · **structure-first, RAG-optional** · no vector lock-in*
 
-**Structure-first, RAG-optional:** agents navigate a folder → document → section
-hierarchy (and the Atlas), not opaque vector top-k. Everything — documents, the
-Atlas, agent memory — is **Markdown**; vectors are an optional enhancement on top.
+</div>
 
-```
+---
+
+> **Why Tome?** Most "chat with your docs" stacks shred files into anonymous vector
+> chunks and hope similarity search returns the right one — losing structure, dropping
+> tables and numbers, impossible to correct. Tome keeps the document's real
+> **structure**, **proves** it didn't silently lose content (a faithfulness gate), and
+> exposes the base the way an agent actually navigates knowledge:
+> **folder → document → section** + a living **Atlas** — over **REST · MCP · a React
+> Library UI**. Vectors are an optional enhancement, never the core.
+
+```text
 extract → structure (LLM) → verify faithfulness → sections + retrieval chunks
    → hybrid search (BM25 + vectors + reranker) → hierarchical Atlas
    → REST + MCP + Library UI
 ```
 
-Product overview, goals & strategy: [PRODUCT.md](PRODUCT.md).
+**Highlights:** 📄 pluggable extraction (top-10) · ✅ faithfulness guarantee ·
+🧭 hierarchical Atlas · 🔎 hybrid search (BM25 + pgvector + reranker) · ✍️ full editing
+& versioning · 🤖 read **and write** over MCP · 🔒 secure-by-default · 🏠 fully-local mode.
+
+Product overview, goals & strategy: **[PRODUCT.md](PRODUCT.md)**.
 
 ---
 

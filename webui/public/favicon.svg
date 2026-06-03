@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Tome logo">
+  <title>Tome — agent-native knowledge OS</title>
+  <rect width="256" height="256" rx="52" fill="#F6F5F0"/>
+  <!-- open book: two pages tilting toward a central spine -->
+  <g fill="#15204A">
+    <path d="M124 108 L53 92 L53 176 L124 188 Z"/>
+    <path d="M132 108 L203 92 L203 176 L132 188 Z"/>
+  </g>
+  <!-- page lines -->
+  <g stroke="#F6F5F0" stroke-width="3" stroke-linecap="round" opacity="0.55">
+    <line x1="66" y1="116" x2="116" y2="126"/>
+    <line x1="66" y1="138" x2="116" y2="148"/>
+    <line x1="190" y1="116" x2="140" y2="126"/>
+    <line x1="190" y1="138" x2="140" y2="148"/>
+  </g>
+  <!-- knowledge graph over the book -->
+  <g stroke="#EDECE6" stroke-width="4" stroke-linecap="round">
+    <line x1="128" y1="100" x2="64" y2="106"/>
+    <line x1="128" y1="100" x2="192" y2="106"/>
+    <line x1="128" y1="100" x2="128" y2="152"/>
+    <line x1="128" y1="152" x2="64" y2="106"/>
+    <line x1="128" y1="152" x2="192" y2="106"/>
+  </g>
+  <g fill="#3F3FE8" stroke="#F6F5F0" stroke-width="3.5">
+    <circle cx="128" cy="100" r="13"/>
+    <circle cx="64" cy="106" r="11"/>
+    <circle cx="192" cy="106" r="11"/>
+    <circle cx="128" cy="152" r="12"/>
+  </g>
+</svg>

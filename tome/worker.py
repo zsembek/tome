@@ -14,6 +14,7 @@ from tome.config import get_config
 from tome.db import DB
 from tome.pipeline.run import ingest
 from tome.storage import get_store
+from tome.webhooks import is_safe_webhook_url, parse_allow_hosts, sign_webhook
 
 log = logging.getLogger("tome.worker")
 _STAGE = Path(__file__).resolve().parent.parent / "_stage"
@@ -31,9 +32,20 @@ def process_outbox(db: DB) -> int:
             if it["aggregate"] == "asset" and it["op"] == "delete":
                 store.delete(payload.get("key", ""))
             elif it["aggregate"] == "webhook" and it["op"] == "deliver":
+                url = payload.get("url", "")
+                allow = parse_allow_hosts(get_config().webhook_allow_hosts)
+                if not is_safe_webhook_url(url, allow_hosts=allow):
+                    log.warning("webhook %s blocked (unsafe / SSRF url: %s)", it["id"], url)
+                    db.mark_outbox(it["id"], "failed")
+                    continue
+                body_bytes = json.dumps(payload.get("body", {})).encode("utf-8")
+                headers = {"Content-Type": "application/json",
+                           "X-Tome-Event": payload.get("event", "")}
+                sig = sign_webhook(body_bytes, payload.get("secret", ""))
+                if sig:
+                    headers["X-Tome-Signature"] = sig
                 with httpx.Client(timeout=10) as c:
-                    c.post(payload["url"], json=payload.get("body", {}),
-                           headers={"X-Tome-Event": payload.get("event", "")})
+                    c.post(url, content=body_bytes, headers=headers).raise_for_status()
             db.mark_outbox(it["id"], "done")
             n += 1
         except Exception as exc:

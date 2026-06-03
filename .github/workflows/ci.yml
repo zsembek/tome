@@ -2,8 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci-canary/**"]   # ci-canary/** is used to verify CI catches failures
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"                # nightly: run the heavy "extras" verification job
 
 jobs:
   lint:
@@ -53,3 +56,20 @@ jobs:
         run: docker build -t tome:ci .
       - name: Build Library UI image
         run: docker build -t tome-webui:ci ./webui
+
+  # Heavy verification of optional extractors/embedders (Docling, fastembed,
+  # cross-encoder reranker). Runs nightly / on demand — not on every push, to keep
+  # the per-commit badge fast and deterministic. This is where the gated real
+  # tests (skipif when the lib is missing) actually execute.
+  extras:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[fastembed,docling,rerank]" pytest
+      - name: Run gated real tests (Docling / fastembed / reranker)
+        run: pytest -m "not integration and not e2e" -q

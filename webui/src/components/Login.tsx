@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { BookOpen } from "lucide-react";
 import { auth, AuthStatus } from "../lib/api";
 import { Button, Input } from "./ui";
 
@@ -32,7 +31,7 @@ export function Login({ status, onAuthed }: { status: AuthStatus; onAuthed: () =
     <div className="h-full flex items-center justify-center">
       <div className="w-80 card space-y-3">
         <div className="flex items-center gap-2 justify-center mb-1">
-          <BookOpen className="w-6 h-6 text-acc" />
+          <img src="/favicon.svg" alt="Tome" className="w-8 h-8" />
           <span className="font-semibold tracking-wide text-lg">TOME</span>
         </div>
         <h2 className="text-center font-medium">

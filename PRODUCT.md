@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="Tome" width="96" /></p>
+
 # Tome — the knowledge base that AI agents read
 
 > **Tome turns any documents into a clean, structured, verifiable Markdown
