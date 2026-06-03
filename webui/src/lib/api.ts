@@ -141,7 +141,12 @@ export interface EntityDetail {
   sections: { section_id: number; heading: string; document_id: number; doc_title: string }[];
   neighbors: { id: number; name: string; kind: string; weight: number }[];
 }
+export interface GraphData {
+  nodes: { id: number; name: string; kind: string; mention_count: number }[];
+  edges: { src: number; dst: number; weight: number }[];
+}
 export const graph = {
+  overview: (limit = 80): Promise<GraphData> => api.get(`/graph?limit=${limit}`),
   entities: (q = ""): Promise<{ entities: GraphEntity[] }> => api.get(`/graph/entities${_q({ q, limit: "150" })}`),
   entity: (id: number): Promise<EntityDetail> => api.get(`/graph/entities/${id}`),
   rebuild: (): Promise<{ documents: number; entities: number }> => api.post("/graph/rebuild"),

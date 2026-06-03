@@ -159,6 +159,25 @@ def get_entity(db: DB, ws: int, entity_id: int) -> dict | None:
     return {"entity": dict(ent), "sections": sections, "neighbors": neighbors}
 
 
+def graph_overview(db: DB, ws: int, limit: int = 60) -> dict:
+    """Nodes (top entities by mentions) + the edges among them — for the graph view."""
+    with db.pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT id, name, kind, mention_count FROM graph_entities
+                       WHERE workspace_id=%s ORDER BY mention_count DESC, name LIMIT %s""",
+                    (ws, limit))
+        nodes = [dict(r) for r in cur.fetchall()]
+        ids = [n["id"] for n in nodes]
+        edges = []
+        if ids:
+            cur.execute("""SELECT src_id, dst_id, weight FROM graph_edges
+                           WHERE workspace_id=%s AND src_id = ANY(%s::bigint[])
+                             AND dst_id = ANY(%s::bigint[])
+                           ORDER BY weight DESC LIMIT 500""", (ws, ids, ids))
+            edges = [{"src": r["src_id"], "dst": r["dst_id"], "weight": r["weight"]}
+                     for r in cur.fetchall()]
+    return {"nodes": nodes, "edges": edges}
+
+
 def graph_stream(db: DB, ws: int, query: str, limit: int = 30) -> list[tuple[int, float]]:
     """Retrieval signal: sections whose entities match the query terms.
     Returns [(section_id, score)] for RRF fusion."""

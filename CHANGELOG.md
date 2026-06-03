@@ -128,6 +128,12 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
   (Markdown backup of every document). Admin gained a **Health** tab (usage + corpus
   faithfulness eval).
 
+### Visual knowledge graph
+- The Graph tab is now an **interactive force-directed network** (`GET /v1/graph`):
+  entities as nodes (size = mentions, colour = kind), co-occurrence relations as edges
+  (width = weight). Drag to pan, wheel/buttons to zoom, click a node to highlight its
+  links and open its documents/neighbors — instead of the previous flat lists.
+
 ### Folders: no orphaned documents
 - **Deleting a non-empty folder is refused** (409) — including a parent whose *subfolder*
   holds documents (counted over the ltree subtree). The UI shows a clear message; move or

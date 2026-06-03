@@ -59,6 +59,15 @@ def test_rest_graph_endpoints(api_client, ingest):
     assert rb["entities"] >= 1
 
 
+def test_graph_overview_endpoint(api_client, ingest):
+    ingest("g.md", "# Pumps\n\nThe Centrifugal Pump and the Gate Valve operate together here.\n", folder="Eng")
+    ov = api_client.get("/v1/graph").json()
+    assert "nodes" in ov and "edges" in ov
+    assert len(ov["nodes"]) >= 1
+    # co-occurrence of two multi-word entities in one section yields at least one edge
+    assert all({"src", "dst", "weight"} <= set(e) for e in ov["edges"])
+
+
 def _db():
     from api.deps import get_db
     return get_db()

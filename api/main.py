@@ -436,6 +436,13 @@ def memory_forget(mem_id: int):
 
 
 # ─────────────────────────── Knowledge graph ───────────────────
+@app.get("/v1/graph", dependencies=[Depends(require_auth)])
+def graph_overview_ep(limit: int = Query(60, ge=1, le=300)):
+    """Graph structure (nodes + edges) for the visual graph view."""
+    from tome.graph import graph_overview
+    return graph_overview(get_db(), current_workspace(), limit)
+
+
 @app.get("/v1/graph/entities", dependencies=[Depends(require_auth)])
 def graph_entities(q: str = "", limit: int = Query(50, ge=1, le=500)):
     from tome.graph import list_entities
