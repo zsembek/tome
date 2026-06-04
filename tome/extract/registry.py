@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from tome.config import Config, get_config
-from tome.extract.base import ExtractResult, Page, page_is_poor
+from tome.extract.base import ExtractResult, Page, page_is_poor, text_looks_garbled
 from tome.extract import pdfutil
 
 log = logging.getLogger(__name__)
@@ -207,7 +207,10 @@ def _repair_poor_pages(result: ExtractResult, pdf_bytes: bytes, fb_name: str,
                     r = fb.extract(target, mime="application/pdf", filename="page.pdf",
                                    ocr_lang=cfg.extract_ocr_lang)
                     txt = "\n\n".join(pg.text for pg in r.pages)
-            if txt and len(txt) > len(p.text):
+            # a garbled (broken-CMap) page has many junk chars, so don't gate on length —
+            # replace whenever the OCR result is itself clean; otherwise keep the longer text.
+            was_garbled = text_looks_garbled(p.text)
+            if txt and not text_looks_garbled(txt) and (was_garbled or len(txt) > len(p.text)):
                 p.text = txt
                 p.char_count = len(txt)
         except Exception as exc:
