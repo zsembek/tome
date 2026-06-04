@@ -481,6 +481,24 @@ class DB:
             }
             cur.execute("SELECT status, count(*) n FROM ingestion_jobs WHERE workspace_id=%s GROUP BY status", (ws,))
             s["jobs"] = {r["status"]: r["n"] for r in cur.fetchall()}
+            # average per-stage ingest time (ms) over the most recent finished jobs
+            cur.execute("""SELECT payload->'timings_ms' t FROM ingestion_jobs
+                           WHERE workspace_id=%s AND payload ? 'timings_ms'
+                           ORDER BY id DESC LIMIT 50""", (ws,))
+            sums: dict[str, int] = {}
+            n = 0
+            for r in cur.fetchall():
+                t = r["t"] if isinstance(r["t"], dict) else {}
+                if not t:
+                    continue
+                n += 1
+                for k, v in t.items():
+                    try:
+                        sums[k] = sums.get(k, 0) + int(v)
+                    except (TypeError, ValueError):
+                        pass
+            s["avg_stage_ms"] = {k: round(v / n) for k, v in sums.items()} if n else {}
+            s["avg_stage_ms_sampled"] = n
             return s
 
     # ── users / sessions (identity) ──
@@ -649,6 +667,7 @@ class DB:
                                   j.error, j.created_at, j.updated_at,
                                   j.payload->>'filename' AS filename,
                                   (j.payload->>'pages_total')::int AS pages_total,
+                                  j.payload->'timings_ms' AS timings_ms,
                                   (SELECT count(*) FROM ingestion_page_results r WHERE r.job_id=j.id) AS pages_done,
                                   (SELECT source_object_key FROM documents d WHERE d.id=j.document_id) AS source_key
                            FROM ingestion_jobs j

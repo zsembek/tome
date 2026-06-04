@@ -8,6 +8,8 @@ import hashlib
 import logging
 import re
 import threading
+import time
+from contextlib import contextmanager
 
 from tome.config import Config, get_config
 from tome.db import DB
@@ -28,6 +30,16 @@ from tome.storage import get_store, sha256
 
 log = logging.getLogger(__name__)
 _FIG_TOKEN = "[[FIGURE_{n:04d}]]"
+
+
+@contextmanager
+def _stage_timer(timings: dict, name: str):
+    """Record wall-clock ms for a pipeline stage into `timings` (for per-stage metrics)."""
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        timings[name] = timings.get(name, 0) + round((time.monotonic() - t0) * 1000)
 
 
 def _map_concurrent(items, fn, concurrency):
@@ -62,6 +74,7 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     store = get_store(cfg)
     doc_key = sha256(file_bytes)[:16]
     pending_assets: list[dict] = []   # populated after the document is created
+    timings: dict[str, int] = {}      # per-stage wall-clock ms (for speed metrics)
 
     def progress(stage: str, p: float):
         if job_id:
@@ -78,7 +91,8 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
 
     # 1. Extract
     progress("extract", 0.1)
-    extracted = extract_document(file_bytes, mime=mime, filename=filename, cfg=cfg)
+    with _stage_timer(timings, "extract"):
+        extracted = extract_document(file_bytes, mime=mime, filename=filename, cfg=cfg)
 
     # 2-4. Per page: structure → verify → vision (with figure-token substitution)
     progress("structure", 0.3)
@@ -194,11 +208,12 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         progress(f"structuring {d}/{n_pages}", round(0.30 + 0.25 * (d / n_pages), 3))
         return pi, md, page_assets, faith, ti, to
 
-    for pi, md, page_assets, faith, ti, to in _map_concurrent(to_run, _worker, cfg.page_concurrency):
-        page_mds[pi] = md
-        pending_assets.extend(page_assets)
-        worst_faith = min(worst_faith, faith)
-        tok_in += ti; tok_out += to
+    with _stage_timer(timings, "structure"):   # structure + verify + figure-vision, in parallel
+        for pi, md, page_assets, faith, ti, to in _map_concurrent(to_run, _worker, cfg.page_concurrency):
+            page_mds[pi] = md
+            pending_assets.extend(page_assets)
+            worst_faith = min(worst_faith, faith)
+            tok_in += ti; tok_out += to
 
     full_md = clean("\n\n".join(page_mds))
     # Final deterministic codepage repair: a mis-decoded CP1251/KOI8-R text layer (broken
@@ -231,7 +246,8 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     # 5. Name
     progress("name", 0.6)
     existing = [f["path"] for f in db.folder_tree(workspace_id)]
-    meta = derive_metadata(full_md, cfg, tlang, existing, filename)
+    with _stage_timer(timings, "name"):
+        meta = derive_metadata(full_md, cfg, tlang, existing, filename)
     if title_override:
         meta["title"] = title_override   # honor a caller-supplied title (ready-Markdown ingest)
     meta["source_object_key"] = src_key  # persist the link to the stored original (enables reindex)
@@ -305,7 +321,8 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     if embedder:
         try:
             flat = [(soi, ch) for soi, chs in chunks_by_sec.items() for ch in chs]
-            vectors = embedder.embed([ch.text for _, ch in flat])
+            with _stage_timer(timings, "embed"):
+                vectors = embedder.embed([ch.text for _, ch in flat])
             embeddings_by_chunk = {(soi, ch.ordinal): v for (soi, ch), v in zip(flat, vectors)}
             embed_model_id = embedder.model_id
             if vectors:
@@ -317,10 +334,11 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                 content_hash=content_hash, pipeline_version=cfg.pipeline_version,
                 faithfulness_score=round(worst_faith, 3), embed_model_id=embed_model_id)
 
-    doc_id = store_document_atomic(
-        db, workspace_id=workspace_id, folder_id=fid, meta=meta, parts=parts,
-        sections=sections, chunks_by_section=chunks_by_sec,
-        embeddings_by_chunk=embeddings_by_chunk, language=language)
+    with _stage_timer(timings, "persist"):
+        doc_id = store_document_atomic(
+            db, workspace_id=workspace_id, folder_id=fid, meta=meta, parts=parts,
+            sections=sections, chunks_by_section=chunks_by_sec,
+            embeddings_by_chunk=embeddings_by_chunk, language=language)
 
     # record assets (original + images) for bookkeeping/GC/serving
     for a in pending_assets:
@@ -341,17 +359,19 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
 
     # 9. Atlas (delta for the folder)
     progress("atlas", 0.95)
-    if fid:
-        _refresh_atlas_node(db, workspace_id, fid, cfg, tlang)
-    _refresh_atlas_index(db, workspace_id)
+    with _stage_timer(timings, "atlas"):
+        if fid:
+            _refresh_atlas_node(db, workspace_id, fid, cfg, tlang)
+        _refresh_atlas_index(db, workspace_id)
 
     if job_id:
         db.update_job(job_id, status="done", stage="done", progress=1.0,
                       document_id=doc_id, tokens_in=tok_in, tokens_out=tok_out,
                       faithfulness_score=round(worst_faith, 3))
-        # MERGE (don't replace) so filename / pages_total survive for the Jobs view
+        # MERGE (don't replace) so filename / pages_total / timings survive for the Jobs view
         db.merge_job_payload(job_id, {"extract_confidence": extract_confidence,
-                                      "extractor": extracted.extractor})
+                                      "extractor": extracted.extractor,
+                                      "timings_ms": timings})
         db.clear_page_results(job_id)   # success → drop per-page checkpoints
     # event for webhooks
     try:

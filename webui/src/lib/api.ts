@@ -121,6 +121,7 @@ export interface Job {
   faithfulness_score: number | null; tokens_in: number; tokens_out: number; attempts: number;
   error: string | null; created_at: string; updated_at: string;
   filename: string | null; pages_total: number | null; pages_done: number; source_key: string | null;
+  timings_ms?: Record<string, number> | null;
 }
 export const jobsApi = {
   list: (): Promise<{ jobs: Job[] }> => api.get("/jobs?limit=200"),

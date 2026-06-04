@@ -70,7 +70,7 @@ def test_vision_skips_logo_without_describe_call(monkeypatch):
 
 # ── Tier 1: parallel per-page processing ────────────────────────────
 def test_page_concurrency_config_default():
-    assert Config().page_concurrency == 4
+    assert Config().page_concurrency == 6
 
 
 def test_map_concurrent_preserves_order_and_runs_in_parallel():

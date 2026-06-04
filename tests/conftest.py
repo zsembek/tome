@@ -25,6 +25,10 @@ if DSN:
     os.environ.setdefault("EXTRACT_PRIMARY", "passthrough")
     os.environ.setdefault("EXTRACT_FALLBACK", "")
     os.environ.setdefault("RUN_INPROCESS_WORKER", "false")
+    # Disable the global in-process rate limiter for the suite: its state is module-level
+    # and survives the per-test schema drop, so hundreds of requests across the suite would
+    # otherwise trip 429 on late tests. The dedicated rate-limit test installs its own.
+    os.environ["RATE_LIMIT_PER_MIN"] = "0"
     os.environ.setdefault("STRUCTURE_SMART", "true")
     os.environ["STRUCTURE_ENABLED"] = "false"   # no LLM restructuring in tests (fast, offline)
     os.environ.setdefault("TOME_OPEN", "true")

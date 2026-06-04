@@ -275,6 +275,17 @@ function HealthTab() {
       </div>
 
       <div>
+        <h3 className="text-sm font-semibold mb-2">Avg ingest time per stage
+          {s.avg_stage_ms_sampled ? <span className="muted font-normal"> · last {s.avg_stage_ms_sampled} docs</span> : null}</h3>
+        <div className="flex flex-wrap gap-2">
+          {s.avg_stage_ms && Object.keys(s.avg_stage_ms).length ?
+            Object.entries(s.avg_stage_ms).map(([k, v]) => (
+              <Pill key={k}>{k}: {Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(1)}s` : `${v}ms`}</Pill>
+            )) : <span className="muted text-sm">no timing data yet</span>}
+        </div>
+      </div>
+
+      <div>
         <h3 className="text-sm font-semibold mb-2">Configuration</h3>
         <div className="flex flex-wrap gap-2">
           {s.config && Object.entries(s.config).map(([k, v]) => (

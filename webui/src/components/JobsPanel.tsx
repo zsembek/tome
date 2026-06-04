@@ -15,6 +15,14 @@ function statusIcon(j: Job) {
   return <Loader2 className="w-4 h-4 text-acc animate-spin" />;
 }
 
+const _ORDER = ["extract", "structure", "name", "split", "embed", "persist", "atlas"];
+function fmtTimings(t?: Record<string, number> | null): string {
+  if (!t || !Object.keys(t).length) return "";
+  const keys = Object.keys(t).sort((a, b) => (_ORDER.indexOf(a) + 1 || 99) - (_ORDER.indexOf(b) + 1 || 99));
+  const ms = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`);
+  return keys.map((k) => `${k} ${ms(t[k])}`).join(" · ");
+}
+
 function stageText(j: Job): string {
   if (j.status === "done") return j.stage === "conflict_pending" ? "Needs conflict resolution"
     : j.stage === "unchanged" ? "Unchanged (duplicate)" : "Done";
@@ -80,6 +88,8 @@ export function JobsPanel({ onOpenDoc }: { onOpenDoc: (id: number) => void }) {
                           style={pct > 0 ? { width: `${Math.max(4, pct)}%` } : undefined} />
                       </div>
                       <div className="muted text-xs mt-1">{running && pct > 0 ? `${pct}%` : ""}{pages ? ` · ${pages}` : ""}</div>
+                      {j.status === "done" && fmtTimings(j.timings_ms) &&
+                        <div className="muted text-xs mt-0.5 opacity-70" title="Per-stage processing time">⏱ {fmtTimings(j.timings_ms)}</div>}
                     </td>
                     <td className="py-2">{j.faithfulness_score != null ? j.faithfulness_score.toFixed(2) : "—"}</td>
                     <td className="py-2 text-right whitespace-nowrap">

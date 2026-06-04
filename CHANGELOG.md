@@ -6,6 +6,13 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Per-stage ingest metrics + higher default concurrency
+- Ingestion now records wall-clock time per stage (extract / structure / name / embed /
+  persist / atlas) into the job payload. Shown per file in the Processing view and
+  aggregated as "Avg ingest time per stage" (last 50 docs) in Admin -> Health
+  (`/v1/stats.avg_stage_ms`). Makes the real bottleneck visible instead of guessed.
+- `PAGE_CONCURRENCY` default raised 4 -> 6 (faster multi-page ingest; still tunable).
+
 ### Ingestion no longer fails on NUL/control bytes
 - Broken PDF text layers can contain NUL (0x00) and other C0 control bytes, which
   PostgreSQL text columns reject ("cannot contain NUL"), failing the whole import. The

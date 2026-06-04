@@ -103,7 +103,7 @@ class Config:
     structure_enabled: bool = field(default_factory=lambda: _b("STRUCTURE_ENABLED", True))
     # Speed: structure/verify/vision each page in parallel (bounded). The biggest single
     # speedup for multi-page documents. Keep <= the DB pool size and your LLM RPM quota.
-    page_concurrency: int = field(default_factory=lambda: _i("PAGE_CONCURRENCY", 4))
+    page_concurrency: int = field(default_factory=lambda: _i("PAGE_CONCURRENCY", 6))
     # Vision describes figures via the LLM (expensive). Off → text-only, much faster.
     vision_enabled: bool = field(default_factory=lambda: _b("VISION_ENABLED", True))
     # Second-pass LLM re-structuring when a page fails faithfulness. Off → one pass only.
