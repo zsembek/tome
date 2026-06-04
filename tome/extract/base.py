@@ -1,6 +1,7 @@
 """Normalized extraction output — shared across ALL providers."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -85,47 +86,48 @@ def _cyrillic_ratio(text: str) -> float:
     return sum(1 for c in letters if 0x0400 <= ord(c) <= 0x04FF) / len(letters)
 
 
-def _repair_codepage_line(line: str) -> str | None:
-    """Re-decode ONE line of single-byte-codepage Cyrillic mis-decoded as Latin-1.
-    Returns the repaired line, or None when no confident repair applies. Works at line
-    granularity so a mixed page (garbled header + clean ASCII + real Cyrillic body) keeps
-    its clean lines intact and only the broken lines are fixed."""
-    letters = [c for c in line if c.isalpha()]
-    if len(letters) < 6:
-        return None
-    # cheap gate: only bother with lines dominated by Latin-1 high letters (potential mojibake)
+_WS_SPLIT = re.compile(r"(\s+)")
+
+
+def _repair_codepage_token(tok: str) -> str:
+    """Re-decode ONE whitespace-delimited token if it is single-byte-codepage Cyrillic
+    mis-decoded as Latin-1. Token granularity is robust to ANY line structure (a giant
+    single line or many short lines) and SAFE: a token is only re-decoded when it is
+    dominated by accented-Latin letters (real ASCII words like 'SIDEL' and genuinely
+    accented words like French 'Opérateur' have a low ratio and are left untouched)."""
+    letters = [c for c in tok if c.isalpha()]
+    if len(letters) < 2:
+        return tok
     hi = sum(1 for c in letters if 0x00C0 <= ord(c) <= 0x00FF)
-    if hi / len(letters) < 0.30:
-        return None
-    threshold = _cyrillic_ratio(line) + 0.30   # require a large, confident Cyrillic gain
-    best, best_ratio = None, threshold
+    if hi / len(letters) < 0.6:        # not a mojibake token
+        return tok
     for codec in ("cp1251", "koi8-r"):
         try:
-            cand = line.encode("latin-1", "ignore").decode(codec, "ignore")
+            cand = tok.encode("latin-1", "ignore").decode(codec, "ignore")
         except Exception:
             continue
-        r = _cyrillic_ratio(cand)
-        if r > best_ratio:
-            best, best_ratio = cand, r
-    return best
+        if _cyrillic_ratio(cand) >= 0.6:   # confidently became Cyrillic
+            return cand
+    return tok
 
 
 def repair_encoding(text: str) -> str | None:
     """Deterministically repair single-byte-codepage Cyrillic that was mis-decoded as
-    Latin-1 (a common broken PDF text layer) -- no OCR/LLM. Repairs LINE BY LINE so a
-    mixed page (garbled header alongside clean ASCII / already-correct Cyrillic) is
-    handled safely: only the broken lines change. Returns the repaired text, or None when
-    nothing needed repair."""
+    Latin-1 (a common broken PDF text layer) -- no OCR/LLM. Works TOKEN BY TOKEN (so it is
+    independent of how the extractor lays out lines) and only rewrites tokens dominated by
+    accented-Latin, leaving clean ASCII and genuinely-accented Western words intact.
+    Returns the repaired text, or None when nothing needed repair."""
     if not text:
         return None
-    out, changed = [], False
-    for line in text.split("\n"):
-        cand = _repair_codepage_line(line)
-        if cand is not None and cand != line:
-            out.append(cand); changed = True
-        else:
-            out.append(line)
-    return "\n".join(out) if changed else None
+    parts = _WS_SPLIT.split(text)
+    changed = False
+    for i, p in enumerate(parts):
+        if p and not p.isspace():
+            fixed = _repair_codepage_token(p)
+            if fixed != p:
+                parts[i] = fixed
+                changed = True
+    return "".join(parts) if changed else None
 
 
 def page_is_poor(page: Page, *, min_chars: int = 80) -> bool:

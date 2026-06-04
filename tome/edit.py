@@ -248,12 +248,18 @@ def update_document(db: DB, doc_id: int, *, title=None, tags=None, folder_path=N
             cur.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id=%s", vals)
 
 
-def delete_document(db: DB, doc_id: int):
-    """Cascade-deletes the document and queues assets for purge via the outbox."""
+def delete_document(db: DB, doc_id: int, keep_keys: set[str] | None = None):
+    """Cascade-deletes the document and queues assets for purge via the outbox.
+    Object keys in `keep_keys` are NOT queued for purge — used by reprocess, which deletes
+    the document but must preserve the stored original (same content-hash path) for the
+    immediate re-ingest, so the source isn't destroyed by the async outbox."""
+    keep = keep_keys or set()
     with db.pool.connection() as conn:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute("SELECT object_key FROM assets WHERE document_id=%s", (doc_id,))
             for r in cur.fetchall():
+                if r["object_key"] in keep:
+                    continue
                 db.enqueue_outbox(cur, "asset", "delete", {"key": r["object_key"]})
             cur.execute("DELETE FROM documents WHERE id=%s", (doc_id,))  # cascade
 

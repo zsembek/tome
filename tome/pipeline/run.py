@@ -13,7 +13,7 @@ from tome.config import Config, get_config
 from tome.db import DB
 from tome.embed import get_embedder
 from tome.extract import extract_document
-from tome.extract.base import Figure
+from tome.extract.base import Figure, repair_encoding
 from tome.extract import pdfutil
 from tome.pipeline import atlas as atlas_mod
 from tome.pipeline.chunk import chunk_section
@@ -201,6 +201,12 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         tok_in += ti; tok_out += to
 
     full_md = clean("\n\n".join(page_mds))
+    # Final deterministic codepage repair: a mis-decoded CP1251/KOI8-R text layer (broken
+    # font) becomes correct Cyrillic here — applied after clean() because the extractor's
+    # raw per-page layout can defeat token detection, whereas the cleaned text is reliable.
+    _repaired = repair_encoding(full_md)
+    if _repaired:
+        full_md = _repaired
 
     # Optional ingestion-time secret/PII redaction (untrusted sources / compliance).
     raw_pages_for_verify = raw_pages

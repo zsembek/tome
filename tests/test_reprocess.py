@@ -25,6 +25,15 @@ def test_reprocess_reextracts_and_replaces(api_client, ingest):
     events = api_client.get("/v1/audit").json()["events"]
     assert any(e["action"] == "document.reprocess" for e in events)
 
+    # the stored original SURVIVES reprocess (so it can be reprocessed again)
+    from tome.db import DB
+    from tome.reindex import _source_key
+    from tome.storage import get_store
+    db = DB()
+    key = _source_key(db, new_id)
+    assert key, "reprocessed document lost its source asset"
+    assert get_store().get(key), "stored original was purged by reprocess"
+
 
 def test_reprocess_missing_document_is_400(api_client):
     assert api_client.post("/v1/documents/999999/reprocess").status_code == 400

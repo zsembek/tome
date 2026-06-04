@@ -58,7 +58,9 @@ def reindex_one(db: DB, ws: int, doc_id: int) -> dict:
     if not data:
         raise ValueError("original missing from object store")
     fid = d["folder_id"]
-    ed.delete_document(db, doc_id)
+    # keep the stored original: the re-ingest reuses the same content-hash path, so we must
+    # not let the async outbox purge it out from under the new document.
+    ed.delete_document(db, doc_id, keep_keys={key})
     new_id = ingest(db, workspace_id=ws, file_bytes=data,
                     filename=d["source_filename"] or "document",
                     mime=d["mime_type"] or "application/octet-stream",

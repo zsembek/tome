@@ -41,6 +41,30 @@ def test_repair_encoding_handles_empty():
     assert repair_encoding(None) is None
 
 
+def test_repair_fixes_giant_single_line_mixed_with_ascii():
+    """The real failure mode: an extractor emits the whole page as ONE line mixing
+    CP1251-mojibake words with ASCII (codes, company names). Token-based repair must fix
+    the mojibake words and leave ASCII (incl. accented French) untouched."""
+    moji = " ".join(w.encode("cp1251").decode("latin-1")
+                     for w in ["РУКОВОДСТВО", "ОПЕРАТОРА", "Номер", "Заказа", "ПНЕВМАТИЧЕСКАЯ"])
+    giant = (f"1 SIDEL Manuel Opérateur Version 03 {moji} SIDEL: A873088I RG Brands "
+             f"SBO 20 Universal {moji} {moji}")   # one line, no newlines
+
+    fixed = repair_encoding(giant)
+    assert fixed is not None
+    assert "РУКОВОДСТВО ОПЕРАТОРА" in fixed
+    assert "ПНЕВМАТИЧЕСКАЯ" in fixed
+    assert "SIDEL" in fixed and "A873088I" in fixed and "RG Brands" in fixed   # ASCII intact
+    assert "Opérateur" in fixed                  # genuinely-accented French NOT corrupted
+
+
+def test_repair_does_not_corrupt_accented_western_text():
+    fr = "Manuel Opérateur — Sidel Conveying — Rue du Commerce — déréglage des éléments."
+    de = "Die Maschine läuft über die Förderbänder für höhere Qualität."
+    assert repair_encoding(fr) is None
+    assert repair_encoding(de) is None
+
+
 def test_repair_fixes_mixed_page_keeps_clean_lines():
     """A real-world mixed page: a CP1251-mojibake header line next to clean ASCII, then a
     clean real-Cyrillic body line and a clean English line. Only the broken line changes."""

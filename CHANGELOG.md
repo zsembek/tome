@@ -6,6 +6,16 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Codepage repair now actually fixes real documents (token-based + post-clean)
+- `repair_encoding` is now **token-based** instead of line-based: it rewrites only the
+  whitespace-delimited tokens that are dominated by accented-Latin (mojibake), so it works
+  regardless of how the extractor lays out lines (a whole page on one line no longer
+  defeats it) and never corrupts clean ASCII or genuinely-accented Western words.
+- It is also applied to the cleaned `full_md` in the pipeline (not only per raw page),
+  because the extractor's raw per-page layout could defeat detection while the cleaned
+  text is reliable. Net effect: mis-decoded CP1251/KOI8-R manuals come out as correct
+  Cyrillic. Verified end-to-end on a real document.
+
 ### Object store: fail loudly when not writable
 - `LocalStore` now probes its directory at startup and logs a prominent ERROR (with the
   remediation command) when it isn't writable — instead of silently dropping every
