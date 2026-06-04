@@ -29,6 +29,19 @@ log = logging.getLogger(__name__)
 _FIG_TOKEN = "[[FIGURE_{n:04d}]]"
 
 
+def _map_concurrent(items, fn, concurrency):
+    """Apply `fn` to each item, preserving INPUT order in the output. Runs up to
+    `concurrency` calls in parallel threads; serial when concurrency<=1 or <2 items.
+    Exceptions propagate (so a failed page fails the job → bounded retry/resume)."""
+    items = list(items)
+    conc = max(1, int(concurrency or 1))
+    if conc == 1 or len(items) <= 1:
+        return [fn(it) for it in items]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(conc, len(items))) as ex:
+        return list(ex.map(fn, items))
+
+
 def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime: str,
            folder_path: str | None = None, folder_id: int | None = None,
            auto_file: bool = False, title_override: str | None = None,
@@ -84,22 +97,24 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     # resume: page results already completed in a previous (failed) attempt of this job
     page_results = db.get_page_results(job_id) if job_id else {}
 
-    def _process_page(raw_with_tokens: str, page, fig_map: dict) -> tuple[str, list, float]:
-        """Structure ONE page (text + figures → Markdown). Returns (md, page_assets, faith)."""
-        nonlocal tok_in, tok_out
+    def _process_page(raw_with_tokens: str, page, fig_map: dict) -> tuple[str, list, float, int, int]:
+        """Structure ONE page (text + figures → Markdown). Pure & thread-safe: returns
+        (md, page_assets, faith, tokens_in, tokens_out) instead of mutating shared state,
+        so pages can run concurrently."""
+        ti_total = to_total = 0
         md, ti, to = structure_page(raw_with_tokens, cfg, tlang)
-        tok_in += ti; tok_out += to
+        ti_total += ti; to_total += to
         faith = 1.0
         if raw_with_tokens.strip():
             rep = verify(page.text or "", md, min_score=cfg.faithfulness_min, target_lang=tlang)
-            if not rep.passed and cfg.structure_smart:
+            if not rep.passed and cfg.structure_smart and cfg.structure_escalate:
                 from tome.llm import get_llm
                 from tome.prompts import load_prompt
                 try:
                     res = get_llm(cfg).chat(system=load_prompt("structure", TARGET_LANG=tlang),
                                             user=raw_with_tokens, model=cfg.llm_structure_model,
                                             max_tokens=cfg.llm_max_completion_tokens)
-                    md2 = res.text.strip(); tok_in += res.tokens_in; tok_out += res.tokens_out
+                    md2 = res.text.strip(); ti_total += res.tokens_in; to_total += res.tokens_out
                     rep2 = verify(page.text or "", md2, min_score=cfg.faithfulness_min, target_lang=tlang)
                     if rep2.score >= rep.score:
                         md, rep = md2, rep2
@@ -117,7 +132,7 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         page_assets: list[dict] = []
         for fn, (token, fig) in enumerate(fig_map.items()):
             block = "\n\n"
-            if is_pdf:
+            if is_pdf and cfg.vision_enabled:
                 try:
                     png = pdfutil.extract_figure_png(file_bytes, fig.page_number - 1, fig.bbox)
                     if png:
@@ -135,34 +150,46 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
                 except Exception as exc:
                     log.debug("vision fig fail: %s", exc)
             md = md.replace(token, block)
-        return md, page_assets, faith
+        return md, page_assets, faith, ti_total, to_total
 
+    # Phase A — assign figure tokens deterministically (cheap, sequential) so concurrent
+    # page workers never collide on a token id.
+    work: list[tuple[int, object, str, dict]] = []
     for pi, page in enumerate(extracted.pages):
-        # finer-grained, visible per-page progress (0.30 → 0.55)
-        progress(f"structuring page {pi + 1}/{n_pages}", round(0.30 + 0.25 * (pi / n_pages), 3))
         raw = page.text or ""
         raw_pages.append(raw)
-        # insert figure tokens (vision substitutes descriptions)
         fig_map: dict[str, Figure] = {}
         for fig in page.figures:
             token = _FIG_TOKEN.format(n=fig_counter)
             raw = raw + f"\n\n{token}\n"
             fig_map[token] = fig
             fig_counter += 1
+        work.append((pi, page, raw, fig_map))
 
+    # Phase B — reuse completed pages (resume), process the rest CONCURRENTLY.
+    page_mds = [""] * len(work)
+    to_run: list[tuple[int, object, str, dict]] = []
+    for (pi, page, raw, fig_map) in work:
         ck = page_results.get(page.number)
         if ck is not None:                       # RESUME: reuse the already-completed page
-            page_mds.append(ck["content"])
+            page_mds[pi] = ck["content"]
             pending_assets.extend(ck.get("assets") or [])
             worst_faith = min(worst_faith, ck["faithfulness"] if ck["faithfulness"] is not None else 1.0)
-            continue
+        else:
+            to_run.append((pi, page, raw, fig_map))
 
-        md, page_assets, faith = _process_page(raw, page, fig_map)
-        worst_faith = min(worst_faith, faith)
-        pending_assets.extend(page_assets)
-        page_mds.append(md)
-        # checkpoint this page so a later failure resumes from here, not from page 1
+    def _worker(item):
+        pi, page, raw, fig_map = item
+        md, page_assets, faith, ti, to = _process_page(raw, page, fig_map)
+        # checkpoint immediately so a crash/restart resumes from here (drives pages_done too)
         db.save_page_result(job_id, page.number, md, page_assets, round(faith, 3))
+        return pi, md, page_assets, faith, ti, to
+
+    for pi, md, page_assets, faith, ti, to in _map_concurrent(to_run, _worker, cfg.page_concurrency):
+        page_mds[pi] = md
+        pending_assets.extend(page_assets)
+        worst_faith = min(worst_faith, faith)
+        tok_in += ti; tok_out += to
 
     full_md = clean("\n\n".join(page_mds))
 

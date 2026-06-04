@@ -6,6 +6,31 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Much faster ingestion
+- **Parallel per-page processing**: structuring, faithfulness verify, and figure vision now
+  run across pages concurrently (bounded by `PAGE_CONCURRENCY`, default 4) instead of strictly
+  one page at a time -- the dominant cost on multi-page documents. Per-page checkpoints,
+  resume, page order, and token/faithfulness accounting are all preserved. Typical multi-page
+  PDFs ingest several times faster.
+- **Single-call vision**: figures are classified and described in one LLM round-trip instead
+  of two (`vision_combined` prompt), halving vision calls per figure. New `VISION_ENABLED=false`
+  switch for text-only (no figure description) imports.
+- **Smarter LLM-skip**: clean prose pages (typical digital PDFs) now skip the restructuring LLM
+  even without Markdown headings -- only genuinely noisy/short-line pages go through it.
+- **Optional escalation**: the second-pass re-structuring on a faithfulness miss is now gated by
+  `STRUCTURE_ESCALATE` (default on) so it can be turned off for maximum speed.
+
+### Broken-font (mojibake) PDFs now recovered via OCR
+- A PDF whose embedded font lacks a proper ToUnicode CMap used to extract as garbage
+  (Cyrillic words come out as random accented-Latin glyphs) and shipped silently -- the
+  page had plenty of text, so the "poor page" check passed it through.
+- Added `text_looks_garbled()`: detects mojibake by the density of Latin-1 symbol glyphs
+  (superscripts/fractions) and accented-Latin runs that real prose (even German/French)
+  never produces.
+- Garbled pages are now flagged poor, so the render+OCR fallback (`vision_llm` by default)
+  rasterizes the page and re-reads the real glyphs, replacing the junk text layer even
+  when it isn't shorter. Clean OCR is required before a page is replaced.
+
 ### Crash-proof ingestion (server rebuild/restart safe)
 - Ingestion now survives a worker being killed mid-import (e.g. `docker compose up
   --build`). A **heartbeat lease** replaces the old 30-minute stale timeout: a live worker

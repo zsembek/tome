@@ -20,13 +20,17 @@ _NOISE_HINT = re.compile(r"[A-Za-z\u0410-\u042f\u0430-\u044f]{3,}\d{3,}|\ufffd")
 
 
 def looks_clean(text: str) -> bool:
-    """Rough heuristic: whether to skip the LLM (smart mode)."""
+    """Rough heuristic: whether to skip the LLM (smart mode).
+
+    A page is "clean enough" to keep verbatim when it has flowing prose (few stray
+    short lines) and no OCR noise. Markdown headings are a bonus, not a requirement —
+    most digital-PDF pages are clean prose with no headings, and forcing every such
+    page through the LLM was the dominant ingestion cost."""
     if not text.strip():
         return True
-    has_headings = bool(re.search(r"^#{1,6}\s", text, re.MULTILINE))
-    short_line_ratio = _short_line_ratio(text)
-    noisy = bool(_NOISE_HINT.search(text))
-    return has_headings and short_line_ratio < 0.25 and not noisy
+    if bool(_NOISE_HINT.search(text)):
+        return False
+    return _short_line_ratio(text) < 0.25
 
 
 def _short_line_ratio(text: str) -> float:

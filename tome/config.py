@@ -101,6 +101,13 @@ class Config:
     # Master switch for LLM restructuring. Off → keep the extracted text as-is (no LLM
     # cost); useful for already-clean Markdown sources and for fast offline tests.
     structure_enabled: bool = field(default_factory=lambda: _b("STRUCTURE_ENABLED", True))
+    # Speed: structure/verify/vision each page in parallel (bounded). The biggest single
+    # speedup for multi-page documents. Keep <= the DB pool size and your LLM RPM quota.
+    page_concurrency: int = field(default_factory=lambda: _i("PAGE_CONCURRENCY", 4))
+    # Vision describes figures via the LLM (expensive). Off → text-only, much faster.
+    vision_enabled: bool = field(default_factory=lambda: _b("VISION_ENABLED", True))
+    # Second-pass LLM re-structuring when a page fails faithfulness. Off → one pass only.
+    structure_escalate: bool = field(default_factory=lambda: _b("STRUCTURE_ESCALATE", True))
     # Content-preservation guarantee: if LLM structuring returns less than this fraction
     # of the source page length, the page is kept as RAW extracted text (never summarize
     # away content). Guards against over-eager models / noisy-scan "noise→empty" drops.

@@ -1,0 +1,15 @@
+You are analyzing an illustration extracted from a document (schematic, drawing, photo,
+chart, table, logo, or decorative element).
+
+Return ONLY a JSON object with exactly these keys:
+- "fig_class": one of "schematic", "drawing", "photo", "chart", "table", "diagram",
+  "logo", "decor".
+- "informative": true if the image carries real document content worth describing;
+  false for logos, page decorations, separators, or blank/near-blank images.
+- "description": if informative, describe it in {TARGET_LANG} concisely but fully — the
+  type of illustration, what is shown, and all captions, labels, numbers, position
+  designations (1-N), arrows, and connections. Reproduce text on the image verbatim and,
+  for block diagrams/flowcharts, describe the logic. Do not invent anything not visible.
+  Use a single paragraph with no headings. If not informative, use an empty string "".
+
+Output strictly the JSON object and nothing else.
