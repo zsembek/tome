@@ -27,6 +27,24 @@ class LocalStore:
         self.root = Path(sd) if sd else (Path(__file__).resolve().parent.parent / "_store")
         self.root.mkdir(parents=True, exist_ok=True)
         self._root_resolved = self.root.resolve()
+        # Fail LOUDLY (not silently) if the store dir isn't writable — e.g. a stale
+        # root-owned Docker volume mounted under a non-root container. Otherwise every
+        # original/figure is dropped and only surfaces much later as "no stored original".
+        self.writable = self._probe_writable()
+        if not self.writable:
+            log.error("object store at %s is NOT writable — originals/figures will be lost. "
+                      "Fix the directory ownership/permissions (e.g. `docker run --rm -v "
+                      "tome_store:/v busybox chown -R 10001:999 /v`) or set S3_USE=true.",
+                      self.root)
+
+    def _probe_writable(self) -> bool:
+        probe = self.root / ".write_probe"
+        try:
+            probe.write_bytes(b"")
+            probe.unlink()
+            return True
+        except Exception:
+            return False
 
     def _safe(self, key: str) -> Path:
         """Path-traversal protection: the key must not escape the store root.

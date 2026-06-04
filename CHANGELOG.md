@@ -6,6 +6,13 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Object store: fail loudly when not writable
+- `LocalStore` now probes its directory at startup and logs a prominent ERROR (with the
+  remediation command) when it isn't writable — instead of silently dropping every
+  original/figure. This previously surfaced only much later as "no stored original to
+  reprocess from" when the `_store` Docker volume was root-owned under the non-root
+  container. (Operationally: `docker run --rm -v tome_store:/v busybox chown -R 10001:999 /v`.)
+
 ### Never fabricate over garbled text (safety)
 - The structure LLM is no longer run on a garbled/mojibake text layer (custom-font
   permutation, mis-decoded codepage). Previously it would invent plausible-but-wrong
