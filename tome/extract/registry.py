@@ -133,15 +133,19 @@ def extract_document(file_bytes: bytes, *, mime: str, filename: str,
     if is_pdf and fb_name and (not result.pages or any(page_is_poor(p) for p in result.pages)):
         result = _repair_poor_pages(result, file_bytes, fb_name, cfg)
 
-    # FINAL guard: strip NUL/C0 control bytes from EVERY page, regardless of which path
-    # produced the text (primary extract, codepage repair, language re-scan, or OCR
-    # fallback). PostgreSQL rejects NUL, so this must be the last thing before return.
+    # FINAL pass on EVERY page, regardless of which path produced the text (primary
+    # extract, codepage repair, language re-scan, or OCR fallback): (1) repair mis-decoded
+    # CP1251/KOI8-R again — the auto-language re-scan can replace pages with a fresh RAW
+    # (still-garbled) extraction AFTER the early repair, and downstream structuring must
+    # see clean text to add headings; (2) strip NUL/C0 control bytes PostgreSQL rejects.
     for p in result.pages:
-        if p.text:
-            sanitized = strip_control_chars(p.text)
-            if sanitized != p.text:
-                p.text = sanitized
-                p.char_count = len(sanitized)
+        if not p.text:
+            continue
+        fixed = repair_encoding(p.text)
+        if fixed and fixed != p.text:
+            p.text = fixed
+        p.text = strip_control_chars(p.text)
+        p.char_count = len(p.text)
     return result
 
 

@@ -10,20 +10,22 @@ from tome.pipeline.structure import looks_clean
 pytestmark = pytest.mark.unit
 
 
-# ── Tier 3: smart-skip ──────────────────────────────────────────────
-def test_clean_prose_without_headings_skips_llm():
-    # a clean digital-PDF paragraph (no markdown heading) should NOT need the LLM
+# ── Tier 3: smart-skip (only skip the LLM for ALREADY-structured pages) ──────
+def test_clean_prose_without_headings_is_structured():
+    # clean prose with NO markdown heading must STILL go to the LLM so it gains a heading
+    # structure (otherwise the document can't be split into meaningful sections)
     prose = ("This section describes the routine maintenance of the centrifugal pump. "
              "Check the oil level before every shift and record the readings in the log. "
              "Replace the seals according to the maintenance schedule provided by the maker.")
-    assert looks_clean(prose) is True
+    assert looks_clean(prose) is False
 
 
 def test_noisy_text_still_needs_llm():
     assert looks_clean("wo\nrd\nby\nwo\nrd\nbr\nok\nen") is False
 
 
-def test_heading_doc_still_clean():
+def test_already_structured_page_skips_llm():
+    # has a markdown heading + clean prose → already structured → skip the LLM
     assert looks_clean("# Title\n\nA sufficiently long and clean paragraph of body text here.") is True
 
 
