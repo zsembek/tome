@@ -175,8 +175,28 @@ def ingest_via_client(client, name: str, content: str, folder: str | None = None
     r = client.post("/v1/documents",
                     files={"file": (name, content.encode("utf-8"), "text/markdown")},
                     data=data)
+    body = r.json()
+    assert "job_id" in body, f"upload failed: HTTP {r.status_code} -> {str(body)[:300]}"
     run_once(DB())
-    return client.get(f"/v1/jobs/{r.json()['job_id']}").json()
+    return client.get(f"/v1/jobs/{body['job_id']}").json()
+
+
+@pytest.fixture(autouse=True)
+def _reset_global_config():
+    """Isolation: some tests rebuild the cached config singleton under TOME_OPEN=false
+    (secure mode). Reset it after every test so the next test gets a fresh config from the
+    (monkeypatch-reverted) env — otherwise secure mode leaks and later uploads 401."""
+    yield
+    try:
+        import tome.config as cfgmod
+        cfgmod._cfg = None
+    except Exception:
+        pass
+    try:
+        import api.deps as deps
+        deps._scope_cache.clear()
+    except Exception:
+        pass
 
 
 @pytest.fixture
