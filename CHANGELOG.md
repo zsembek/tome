@@ -6,6 +6,12 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Ingestion no longer fails on NUL/control bytes
+- Broken PDF text layers can contain NUL (0x00) and other C0 control bytes, which
+  PostgreSQL text columns reject ("cannot contain NUL"), failing the whole import. The
+  pipeline now strips them (`strip_control_chars`, keeping TAB/NEWLINE) per page during
+  extraction and again in `clean()`, so such documents ingest cleanly.
+
 ### Codepage repair now actually fixes real documents (token-based + post-clean)
 - `repair_encoding` is now **token-based** instead of line-based: it rewrites only the
   whitespace-delimited tokens that are dominated by accented-Latin (mojibake), so it works

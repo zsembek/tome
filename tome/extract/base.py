@@ -86,6 +86,19 @@ def _cyrillic_ratio(text: str) -> float:
     return sum(1 for c in letters if 0x0400 <= ord(c) <= 0x04FF) / len(letters)
 
 
+# C0 control chars (and DEL) that PostgreSQL text columns reject — keep TAB and NEWLINE.
+_CONTROL_CHARS = {c: None for c in range(0x20) if c not in (0x09, 0x0A)}
+_CONTROL_CHARS[0x7F] = None
+
+
+def strip_control_chars(text: str) -> str:
+    """Remove NUL (0x00) and other C0 control bytes that PostgreSQL text columns reject.
+    Broken PDF text layers commonly contain them; keeps TAB and NEWLINE."""
+    if not text:
+        return text
+    return text.translate(_CONTROL_CHARS)
+
+
 _WS_SPLIT = re.compile(r"(\s+)")
 
 

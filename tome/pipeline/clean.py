@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
+from tome.extract.base import strip_control_chars
+
 _PAGE_META_RE = re.compile(r"<!--\s*Page(?:Header|Footer|Number)=[^>]*?-->\s*", re.IGNORECASE)
 _PAGE_BREAK_RE = re.compile(r"<!--\s*PageBreak\s*-->", re.IGNORECASE)
 _TABLE_BLOCK_RE = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
@@ -15,7 +17,7 @@ _MANY_BLANK_RE = re.compile(r"\n{3,}")
 
 
 def clean(markdown: str) -> str:
-    text = markdown
+    text = strip_control_chars(markdown)   # drop NUL/C0 bytes PostgreSQL rejects
     text = _PAGE_META_RE.sub("", text)
     text = _PAGE_BREAK_RE.sub("\n\n", text)
     text = _TABLE_BLOCK_RE.sub(_table_replacer, text)

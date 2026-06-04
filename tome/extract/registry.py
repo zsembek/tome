@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 
 from tome.config import Config, get_config
-from tome.extract.base import ExtractResult, Page, page_is_poor, repair_encoding, text_looks_garbled
+from tome.extract.base import (ExtractResult, Page, page_is_poor, repair_encoding,
+                               strip_control_chars, text_looks_garbled)
 from tome.extract import pdfutil
 
 log = logging.getLogger(__name__)
@@ -106,6 +107,11 @@ def extract_document(file_bytes: bytes, *, mime: str, filename: str,
     for p in result.pages:
         if not p.text:
             continue
+        # strip NUL/C0 control bytes (broken PDFs contain them) — PostgreSQL rejects NUL
+        sanitized = strip_control_chars(p.text)
+        if sanitized != p.text:
+            p.text = sanitized
+            p.char_count = len(sanitized)
         fixed = repair_encoding(p.text)
         if fixed and fixed != p.text:
             log.info("repaired mis-decoded text layer (page %s) via codepage re-decode", p.number)
