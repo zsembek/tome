@@ -6,6 +6,17 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Object store: robust STORAGE_DIR + clear S3 error
+- `STORAGE_DIR` is now hardened against a leaked inline comment: some `env_file`
+  parsers pass `STORAGE_DIR=    # note` through verbatim, which previously made the
+  store land in a junk, non-shared, non-persistent path inside the container (lost on
+  recreate, not visible to other services). `LocalStore` now strips a leaked
+  `# comment` and falls back to the shared `/app/_store` volume. `.env.example` keeps
+  the value line clean.
+- `S3_USE=true` without `boto3` installed now raises a clear, actionable `RuntimeError`
+  (install the S3 extra or set `S3_USE=false`) instead of crash-looping the worker with
+  a cryptic `ModuleNotFoundError`.
+
 ### Per-stage ingest metrics + higher default concurrency
 - Ingestion now records wall-clock time per stage (extract / structure / name / embed /
   persist / atlas) into the job payload. Shown per file in the Processing view and

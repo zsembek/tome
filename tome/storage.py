@@ -7,11 +7,31 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from pathlib import Path
 
 from tome.config import Config, get_config
 
 log = logging.getLogger(__name__)
+
+_INLINE_COMMENT = re.compile(r"\s#")
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Drop a leaked inline comment from an env value.
+
+    docker-compose's ``env_file`` parser can pass a line like
+    ``STORAGE_DIR=    # note`` through verbatim, so the value arrives as
+    ``"# note ..."``. A ``#`` that begins the value, or is preceded by
+    whitespace, is treated as a comment marker; a ``#`` embedded inside a
+    token (e.g. a path like ``/data#1``) is kept."""
+    value = value.strip()
+    if value.startswith("#"):
+        return ""
+    m = _INLINE_COMMENT.search(value)
+    if m:
+        return value[:m.start()].strip()
+    return value
 
 
 class LocalStore:
@@ -24,6 +44,10 @@ class LocalStore:
         # otherwise _store next to the package (in Docker — the shared volume /app/_store).
         sd = (os.environ.get("STORAGE_DIR", "") or
               str(cfg.__dict__.get("storage_dir", ""))).strip()
+        # Defensive: docker-compose's env_file may pass an inline comment from
+        # .env verbatim (`STORAGE_DIR=    # note`). Strip a leaked comment so the
+        # store never lands in a junk, non-shared, non-persistent path.
+        sd = _strip_inline_comment(sd)
         self.root = Path(sd) if sd else (Path(__file__).resolve().parent.parent / "_store")
         self.root.mkdir(parents=True, exist_ok=True)
         self._root_resolved = self.root.resolve()
@@ -89,7 +113,17 @@ class S3Store:
     backend = "s3"
 
     def __init__(self, cfg: Config):
-        import boto3
+        try:
+            import boto3
+        except ImportError as exc:
+            # S3_USE=true is an explicit opt-in; never silently fall back to the
+            # local store (that would split data across backends). Fail with a
+            # clear, actionable message instead of a cryptic crash-loop.
+            raise RuntimeError(
+                "S3_USE=true but boto3 is not installed. Install the S3 extra "
+                "(`pip install tome[s3]` / add boto3 to the image) or set "
+                "S3_USE=false to use the local filesystem store."
+            ) from exc
         self.bucket = cfg.s3_bucket
         self.client = boto3.client(
             "s3", endpoint_url=cfg.s3_endpoint,
