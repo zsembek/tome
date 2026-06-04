@@ -703,8 +703,10 @@ class DB:
     def save_page_result(self, job_id: int, page_number: int, content: str,
                          assets: list, faithfulness: float | None):
         import json
+        from tome.extract.base import strip_control_chars
         if not job_id:
             return
+        content = strip_control_chars(content or "")   # PostgreSQL rejects NUL/control bytes
         with self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute("""INSERT INTO ingestion_page_results
                            (job_id, page_number, content, assets, faithfulness)

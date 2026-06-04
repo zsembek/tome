@@ -132,6 +132,16 @@ def extract_document(file_bytes: bytes, *, mime: str, filename: str,
     fb_name = cfg.extract_scanned or cfg.extract_fallback
     if is_pdf and fb_name and (not result.pages or any(page_is_poor(p) for p in result.pages)):
         result = _repair_poor_pages(result, file_bytes, fb_name, cfg)
+
+    # FINAL guard: strip NUL/C0 control bytes from EVERY page, regardless of which path
+    # produced the text (primary extract, codepage repair, language re-scan, or OCR
+    # fallback). PostgreSQL rejects NUL, so this must be the last thing before return.
+    for p in result.pages:
+        if p.text:
+            sanitized = strip_control_chars(p.text)
+            if sanitized != p.text:
+                p.text = sanitized
+                p.char_count = len(sanitized)
     return result
 
 
