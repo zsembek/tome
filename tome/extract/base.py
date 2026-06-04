@@ -42,27 +42,55 @@ class Extractor(Protocol):
 
 
 def text_looks_garbled(text: str, *, min_chars: int = 120,
-                       symbol_ratio: float = 0.04, accent_ratio: float = 0.5) -> bool:
-    """Detect mojibake from a PDF whose embedded font has a missing/wrong ToUnicode CMap.
-    Such extraction yields glyph codes reinterpreted as Latin-1: real text drowns in
-    accented-Latin letters (U+00C0..U+024F) and Latin-1 symbol glyphs (U+00A0..U+00BF,
-    superscripts/fractions/etc.). Genuine prose -- even heavily-accented German/French --
-    almost never contains Latin-1 symbol glyphs, which is the reliable tell. Returns True
-    when the page should be re-read by the render+OCR fallback instead of the broken text
-    layer."""
+                       symbol_ratio: float = 0.04, accent_ratio: float = 0.55) -> bool:
+    """Detect mojibake from a broken PDF text layer. Two common classes:
+      1) a missing/wrong ToUnicode CMap -> glyph codes reinterpreted as Latin-1, with
+         Latin-1 symbol glyphs (U+00A0..U+00BF, superscripts/fractions) scattered as
+         "letters" — caught by symbol-glyph density.
+      2) a single-byte codepage (e.g. CP1251 Russian) mis-decoded as Latin-1 -> almost
+         every char becomes an accented-Latin letter (U+00C0..U+024F), often with no
+         symbol glyphs at all — caught by overwhelming accented-Latin density.
+    Genuine prose -- even heavily-accented German/French -- has only a few percent
+    accented letters and virtually no Latin-1 symbol glyphs, so neither signal fires.
+    Returns True when the page's text layer should not be trusted."""
     chars = [c for c in (text or "") if not c.isspace()]
     if len(chars) < min_chars:
         return False
     n = len(chars)
     symbols = sum(1 for c in chars if 0x00A0 <= ord(c) <= 0x00BF)
     accents = sum(1 for c in chars if 0x00C0 <= ord(c) <= 0x024F)
-    # primary signal: a non-trivial density of Latin-1 symbol glyphs scattered as "letters"
-    if symbols / n >= symbol_ratio:
+    if symbols / n >= symbol_ratio:          # class 1: symbol glyphs as text
         return True
-    # backstop: overwhelmingly accented Latin with at least one symbol glyph (broken CMap)
-    if symbols and accents / n >= accent_ratio:
+    if accents / n >= accent_ratio:          # class 2: a whole codepage mis-decoded
         return True
     return False
+
+
+def _cyrillic_ratio(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if 0x0400 <= ord(c) <= 0x04FF) / len(letters)
+
+
+def repair_encoding(text: str) -> str | None:
+    """If `text` is single-byte-codepage Cyrillic that was mis-decoded as Latin-1 (a
+    common broken PDF text layer), re-decode it deterministically and return clean
+    Cyrillic -- no OCR/LLM needed. Returns None when no confident repair applies (clean
+    text, already-correct Cyrillic, or an unrecoverable custom-font garble)."""
+    if not text:
+        return None
+    threshold = _cyrillic_ratio(text) + 0.30   # require a large, confident improvement
+    best, best_ratio = None, threshold
+    for codec in ("cp1251", "koi8-r"):
+        try:
+            cand = text.encode("latin-1", "ignore").decode(codec, "ignore")
+        except Exception:
+            continue
+        r = _cyrillic_ratio(cand)
+        if r > best_ratio:
+            best, best_ratio = cand, r
+    return best
 
 
 def page_is_poor(page: Page, *, min_chars: int = 80) -> bool:

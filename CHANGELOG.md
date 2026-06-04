@@ -20,6 +20,17 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 - **Optional escalation**: the second-pass re-structuring on a faithfulness miss is now gated by
   `STRUCTURE_ESCALATE` (default on) so it can be turned off for maximum speed.
 
+### Mis-decoded codepage text layers repaired deterministically
+- A second mojibake class: a CP1251/KOI8-R (Cyrillic) PDF text layer decoded as Latin-1,
+  where almost every character becomes an accented-Latin letter (often with no symbol
+  glyphs), so the first detector missed it. `text_looks_garbled()` now also flags
+  overwhelming accented-Latin density.
+- New `repair_encoding()` recovers such text by re-encoding Latin-1 and re-decoding the
+  real codepage -- exact Cyrillic, no OCR/LLM cost. Applied per page during extraction
+  before language detection; pages still garbled afterwards (custom-font CMap) fall
+  through to the render+OCR fallback as before. Real Cyrillic and accented Western text
+  are left untouched.
+
 ### Broken-font (mojibake) PDFs now recovered via OCR
 - A PDF whose embedded font lacks a proper ToUnicode CMap used to extract as garbage
   (Cyrillic words come out as random accented-Latin glyphs) and shipped silently -- the

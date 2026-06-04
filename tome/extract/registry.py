@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from tome.config import Config, get_config
-from tome.extract.base import ExtractResult, Page, page_is_poor, text_looks_garbled
+from tome.extract.base import ExtractResult, Page, page_is_poor, repair_encoding, text_looks_garbled
 from tome.extract import pdfutil
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,17 @@ def extract_document(file_bytes: bytes, *, mime: str, filename: str,
     except Exception as exc:
         log.warning("primary extractor %s failed: %s — trying fallback", primary_name, exc)
         result = ExtractResult(pages=[], metadata={}, extractor=primary_name)
+
+    # Cheap deterministic repair: a CP1251/KOI8-R text layer mis-decoded as Latin-1 is
+    # fixed by re-decoding (no OCR/LLM). Runs first so language detection sees clean text;
+    # pages that are still garbled afterwards (custom-font CMap) fall through to OCR below.
+    for p in result.pages:
+        if p.text and text_looks_garbled(p.text):
+            fixed = repair_encoding(p.text)
+            if fixed and not text_looks_garbled(fixed):
+                log.info("repaired mis-decoded text layer (page %s) via codepage re-decode", p.number)
+                p.text = fixed
+                p.char_count = len(fixed)
 
     # AI language pre-analysis: detect the document's real language(s) and, if the OCR
     # ran with the wrong languages, re-scan with the correct set. Never breaks extraction.
