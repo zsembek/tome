@@ -98,15 +98,19 @@ def extract_document(file_bytes: bytes, *, mime: str, filename: str,
         result = ExtractResult(pages=[], metadata={}, extractor=primary_name)
 
     # Cheap deterministic repair: a CP1251/KOI8-R text layer mis-decoded as Latin-1 is
-    # fixed by re-decoding (no OCR/LLM). Runs first so language detection sees clean text;
-    # pages that are still garbled afterwards (custom-font CMap) fall through to OCR below.
+    # fixed by re-decoding (no OCR/LLM), LINE BY LINE — so it also fixes MIXED pages
+    # (garbled header + clean ASCII/Cyrillic body) without disturbing the clean lines.
+    # Run unconditionally (repair_encoding returns None when nothing needs fixing); runs
+    # first so language detection sees clean text. Pages still garbled afterwards
+    # (custom-font CMap permutation) fall through to the render+OCR repair below.
     for p in result.pages:
-        if p.text and text_looks_garbled(p.text):
-            fixed = repair_encoding(p.text)
-            if fixed and not text_looks_garbled(fixed):
-                log.info("repaired mis-decoded text layer (page %s) via codepage re-decode", p.number)
-                p.text = fixed
-                p.char_count = len(fixed)
+        if not p.text:
+            continue
+        fixed = repair_encoding(p.text)
+        if fixed and fixed != p.text:
+            log.info("repaired mis-decoded text layer (page %s) via codepage re-decode", p.number)
+            p.text = fixed
+            p.char_count = len(fixed)
 
     # AI language pre-analysis: detect the document's real language(s) and, if the OCR
     # ran with the wrong languages, re-scan with the correct set. Never breaks extraction.

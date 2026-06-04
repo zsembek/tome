@@ -39,3 +39,21 @@ def test_repair_encoding_leaves_clean_text_alone():
 def test_repair_encoding_handles_empty():
     assert repair_encoding("") is None
     assert repair_encoding(None) is None
+
+
+def test_repair_fixes_mixed_page_keeps_clean_lines():
+    """A real-world mixed page: a CP1251-mojibake header line next to clean ASCII, then a
+    clean real-Cyrillic body line and a clean English line. Only the broken line changes."""
+    header = ("РУКОВОДСТВО ОПЕРАТОРА".encode("cp1251").decode("latin-1")
+              + " SIDEL A873088I RG Brands")
+    clean_cyr = "Пневматическая конвейерная установка работает эффективно и надёжно."
+    clean_en = "Sidel Group CONVEYING DIVISION Reichstett France contact details here."
+    text = header + "\n" + clean_cyr + "\n" + clean_en
+
+    fixed = repair_encoding(text)
+    assert fixed is not None
+    lines = fixed.split("\n")
+    assert "РУКОВОДСТВО ОПЕРАТОРА" in lines[0]   # mojibake header repaired
+    assert "SIDEL" in lines[0] and "RG Brands" in lines[0]   # ASCII on that line preserved
+    assert lines[1] == clean_cyr                 # already-correct Cyrillic untouched
+    assert lines[2] == clean_en                  # clean English untouched

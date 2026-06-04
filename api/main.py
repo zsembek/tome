@@ -534,6 +534,22 @@ def remove_document(doc_id: int):
     return {"deleted": doc_id}
 
 
+@app.post("/v1/documents/{doc_id}/reprocess", dependencies=[Depends(require_auth)])
+def reprocess_document(doc_id: int, actor: str = Depends(actor_label)):
+    """Re-run the current extraction pipeline on the document's stored original — used to
+    apply extraction fixes (e.g. mojibake/encoding repair, OCR) to an already-imported
+    document without a manual re-upload. Replaces the document in place."""
+    from tome.reindex import reindex_one
+    db = get_db()
+    try:
+        res = reindex_one(db, current_workspace(), doc_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    db.add_audit(current_workspace(), actor, "document.reprocess",
+                 f"{doc_id} -> {res['new_id']}")
+    return res
+
+
 @app.get("/v1/documents/{doc_id}/versions", dependencies=[Depends(require_auth)])
 def doc_versions(doc_id: int):
     return {"versions": ed.list_versions(get_db(), doc_id)}

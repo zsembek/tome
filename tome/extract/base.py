@@ -63,6 +63,18 @@ def text_looks_garbled(text: str, *, min_chars: int = 120,
         return True
     if accents / n >= accent_ratio:          # class 2: a whole codepage mis-decoded
         return True
+    # class 3: a custom-font CMap PERMUTATION reinterpreted as ASCII letters + brackets
+    # (glyphs render as real Cyrillic but the text layer is a substitution cipher). Tells:
+    # brackets/backslash used as letters, and lowercase->UPPERCASE transitions mid-word.
+    # A false positive here is harmless: it only re-routes the page through render+OCR.
+    bracketish = sum(1 for c in chars if c in "[]{}\\|<>^~`")
+    if bracketish / n >= 0.04:
+        return True
+    midcaps = sum(1 for a, b in zip(chars, chars[1:])
+                  if a.isalpha() and a.islower() and ord(a) < 0x250
+                  and b.isalpha() and b.isupper() and ord(b) < 0x250)
+    if midcaps / n >= 0.06:
+        return True
     return False
 
 
@@ -73,24 +85,47 @@ def _cyrillic_ratio(text: str) -> float:
     return sum(1 for c in letters if 0x0400 <= ord(c) <= 0x04FF) / len(letters)
 
 
-def repair_encoding(text: str) -> str | None:
-    """If `text` is single-byte-codepage Cyrillic that was mis-decoded as Latin-1 (a
-    common broken PDF text layer), re-decode it deterministically and return clean
-    Cyrillic -- no OCR/LLM needed. Returns None when no confident repair applies (clean
-    text, already-correct Cyrillic, or an unrecoverable custom-font garble)."""
-    if not text:
+def _repair_codepage_line(line: str) -> str | None:
+    """Re-decode ONE line of single-byte-codepage Cyrillic mis-decoded as Latin-1.
+    Returns the repaired line, or None when no confident repair applies. Works at line
+    granularity so a mixed page (garbled header + clean ASCII + real Cyrillic body) keeps
+    its clean lines intact and only the broken lines are fixed."""
+    letters = [c for c in line if c.isalpha()]
+    if len(letters) < 6:
         return None
-    threshold = _cyrillic_ratio(text) + 0.30   # require a large, confident improvement
+    # cheap gate: only bother with lines dominated by Latin-1 high letters (potential mojibake)
+    hi = sum(1 for c in letters if 0x00C0 <= ord(c) <= 0x00FF)
+    if hi / len(letters) < 0.30:
+        return None
+    threshold = _cyrillic_ratio(line) + 0.30   # require a large, confident Cyrillic gain
     best, best_ratio = None, threshold
     for codec in ("cp1251", "koi8-r"):
         try:
-            cand = text.encode("latin-1", "ignore").decode(codec, "ignore")
+            cand = line.encode("latin-1", "ignore").decode(codec, "ignore")
         except Exception:
             continue
         r = _cyrillic_ratio(cand)
         if r > best_ratio:
             best, best_ratio = cand, r
     return best
+
+
+def repair_encoding(text: str) -> str | None:
+    """Deterministically repair single-byte-codepage Cyrillic that was mis-decoded as
+    Latin-1 (a common broken PDF text layer) -- no OCR/LLM. Repairs LINE BY LINE so a
+    mixed page (garbled header alongside clean ASCII / already-correct Cyrillic) is
+    handled safely: only the broken lines change. Returns the repaired text, or None when
+    nothing needed repair."""
+    if not text:
+        return None
+    out, changed = [], False
+    for line in text.split("\n"):
+        cand = _repair_codepage_line(line)
+        if cand is not None and cand != line:
+            out.append(cand); changed = True
+        else:
+            out.append(line)
+    return "\n".join(out) if changed else None
 
 
 def page_is_poor(page: Page, *, min_chars: int = 80) -> bool:

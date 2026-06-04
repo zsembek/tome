@@ -111,6 +111,8 @@ export const docs = {
   rename: (id: number, title: string) => api.patch(`/documents/${id}`, { title }),
   remove: (id: number) => api.del(`/documents/${id}`),
   downloadSource: (id: number, filename: string) => api.download(`/documents/${id}/source`, filename),
+  reprocess: (id: number): Promise<{ old_id: number; new_id: number }> =>
+    api.post(`/documents/${id}/reprocess`),
   unfiled: (): Promise<{ documents: Doc[] }> => api.get("/unfiled"),
 };
 

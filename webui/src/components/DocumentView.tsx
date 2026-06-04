@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  Pencil, Trash2, History, Download, AlertTriangle, FileText, BookOpen, Check, X,
+  Pencil, Trash2, History, Download, AlertTriangle, FileText, BookOpen, Check, X, RefreshCw,
 } from "lucide-react";
 import { api, docs as dapi, Doc, Section } from "../lib/api";
 import { Button, Pill, Modal, Card, Spinner, toast } from "./ui";
@@ -56,6 +56,19 @@ export function DocumentView({ docId, onChanged, canWrite = true }: { docId: num
     await api.del(`/sections/${id}`); setActive({ kind: "full" }); await loadMeta(); toast("Section deleted");
   }
   async function delDoc() { if (confirm("Delete this document?")) { await dapi.remove(docId); onChanged(); toast("Document deleted"); } }
+  const [reprocessing, setReprocessing] = useState(false);
+  async function reprocess() {
+    if (!confirm("Re-extract this document from the original file? Applies the latest "
+                 + "extraction fixes (encoding/OCR). This replaces the current text.")) return;
+    setReprocessing(true);
+    try {
+      await dapi.reprocess(docId);
+      toast("Reprocessed from original");
+      onChanged();
+    } catch (e: any) {
+      toast(e?.message || "reprocess failed", "err");
+    } finally { setReprocessing(false); }
+  }
   async function rename() {
     const t = prompt("New title:", doc?.title); if (!t) return;
     await dapi.rename(docId, t); await loadMeta(); onChanged(); toast("Renamed");
@@ -81,6 +94,7 @@ export function DocumentView({ docId, onChanged, canWrite = true }: { docId: num
           <div className="flex-1" />
           <button className="text-mut hover:text-acc" title="Versions" onClick={async () => setVersions((await api.get(`/documents/${docId}/versions`)).versions)}><History className="w-4 h-4" /></button>
           <button className="text-mut hover:text-acc" title="Export .zip" onClick={() => api.download(`/documents/${docId}/export`, `${doc.title}.zip`)}><Download className="w-4 h-4" /></button>
+          {canWrite && <button className="text-mut hover:text-acc disabled:opacity-50" title="Reprocess from original (re-extract with latest fixes)" disabled={reprocessing} onClick={reprocess}><RefreshCw className={`w-4 h-4 ${reprocessing ? "animate-spin" : ""}`} /></button>}
           {canWrite && <button className="text-mut hover:text-red-400" title="Delete" onClick={delDoc}><Trash2 className="w-4 h-4" /></button>}
         </div>
         {doc.summary && <p className="muted text-sm mt-1">{doc.summary}</p>}

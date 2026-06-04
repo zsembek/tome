@@ -8,6 +8,7 @@ import logging
 import re
 
 from tome.config import Config
+from tome.extract.base import text_looks_garbled
 from tome.llm import get_llm
 from tome.prompts import load_prompt
 
@@ -49,6 +50,12 @@ def structure_page(text: str, cfg: Config, target_lang: str) -> tuple[str, int, 
         return "", 0, 0
     if not getattr(cfg, "structure_enabled", True):
         return text.strip(), 0, 0  # LLM restructuring disabled — keep raw text
+    # SAFETY: never feed a broken/garbled text layer (custom-font permutation, mis-decoded
+    # codepage) to the LLM — it fabricates plausible-but-wrong content and placeholders.
+    # Keep the raw text verbatim; the extractor's OCR fallback is the path to recover it.
+    if text_looks_garbled(text):
+        log.warning("structure: garbled text layer — skipping LLM, keeping raw (no fabrication)")
+        return text.strip(), 0, 0
     if cfg.structure_smart and looks_clean(text):
         return text.strip(), 0, 0  # already clean — skip the LLM
     system = load_prompt("structure", TARGET_LANG=target_lang)

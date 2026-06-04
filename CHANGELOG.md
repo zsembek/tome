@@ -6,6 +6,20 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Never fabricate over garbled text (safety)
+- The structure LLM is no longer run on a garbled/mojibake text layer (custom-font
+  permutation, mis-decoded codepage). Previously it would invent plausible-but-wrong
+  content and write placeholders like "[unreadable]" — dangerous in a technical manual.
+  Garbled pages are now kept verbatim (honest) and routed to the extractor's OCR fallback;
+  the LLM still structures genuine noisy text as before.
+
+### One-click Reprocess (apply extraction fixes to existing documents)
+- New `POST /v1/documents/{id}/reprocess` and a **Reprocess** button in the document view
+  re-run the current extraction pipeline on the document's stored original -- so encoding/
+  mojibake/OCR fixes apply to already-imported documents without a manual re-upload.
+  Redeploying the worker does not reprocess old documents; this does. Audited as
+  `document.reprocess`. Backed by `reindex.reindex_one()`.
+
 ### Much faster ingestion
 - **Parallel per-page processing**: structuring, faithfulness verify, and figure vision now
   run across pages concurrently (bounded by `PAGE_CONCURRENCY`, default 4) instead of strictly
@@ -20,16 +34,27 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 - **Optional escalation**: the second-pass re-structuring on a faithfulness miss is now gated by
   `STRUCTURE_ESCALATE` (default on) so it can be turned off for maximum speed.
 
+### Custom-font CMap permutations detected -> OCR
+- A third mojibake class: a PDF whose font renders correct Cyrillic glyphs but whose text
+  layer is a substitution cipher to arbitrary ASCII letters/brackets (e.g. "MUJLJ" for a
+  chapter heading). The bytes are plain ASCII, so the symbol/accent detectors and codepage
+  re-decode all missed it. `text_looks_garbled()` now also flags this by bracket/backslash
+  density and lowercase->UPPERCASE mid-word transitions, routing the page to render+OCR.
+  (A false positive is harmless -- it only re-reads a page via OCR, which is still correct.)
+- Restored live per-page progress on the floating status widget during parallel
+  structuring (it no longer sticks at "structuring 30%" while pages complete).
+
 ### Mis-decoded codepage text layers repaired deterministically
 - A second mojibake class: a CP1251/KOI8-R (Cyrillic) PDF text layer decoded as Latin-1,
   where almost every character becomes an accented-Latin letter (often with no symbol
   glyphs), so the first detector missed it. `text_looks_garbled()` now also flags
   overwhelming accented-Latin density.
 - New `repair_encoding()` recovers such text by re-encoding Latin-1 and re-decoding the
-  real codepage -- exact Cyrillic, no OCR/LLM cost. Applied per page during extraction
-  before language detection; pages still garbled afterwards (custom-font CMap) fall
-  through to the render+OCR fallback as before. Real Cyrillic and accented Western text
-  are left untouched.
+  real codepage -- exact Cyrillic, no OCR/LLM cost. It works **line by line** and runs on
+  every page, so MIXED pages (a garbled header next to clean ASCII and already-correct
+  Cyrillic body) are fixed without disturbing the clean lines. Real Cyrillic and accented
+  Western text are left untouched (a large, confident Cyrillic-ratio gain is required).
+  Pages still garbled afterwards (custom-font CMap permutation) fall through to render+OCR.
 
 ### Broken-font (mojibake) PDFs now recovered via OCR
 - A PDF whose embedded font lacks a proper ToUnicode CMap used to extract as garbage

@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 
 from tome.config import Config, get_config
 from tome.db import DB
@@ -178,11 +179,19 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
         else:
             to_run.append((pi, page, raw, fig_map))
 
+    _plock = threading.Lock()
+    _done = [len(work) - len(to_run)]   # pages already finished (resumed from checkpoints)
+
     def _worker(item):
         pi, page, raw, fig_map = item
         md, page_assets, faith, ti, to = _process_page(raw, page, fig_map)
         # checkpoint immediately so a crash/restart resumes from here (drives pages_done too)
         db.save_page_result(job_id, page.number, md, page_assets, round(faith, 3))
+        # live progress for the floating status widget (advance 0.30 -> 0.55 as pages land)
+        with _plock:
+            _done[0] += 1
+            d = _done[0]
+        progress(f"structuring {d}/{n_pages}", round(0.30 + 0.25 * (d / n_pages), 3))
         return pi, md, page_assets, faith, ti, to
 
     for pi, md, page_assets, faith, ti, to in _map_concurrent(to_run, _worker, cfg.page_concurrency):
