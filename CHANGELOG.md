@@ -6,6 +6,28 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-05
+
+First public release. Tome is the agent-native knowledge OS: it turns messy documents
+(PDFs, scans, DOCX) into a clean, verifiable, **Markdown** knowledge base that LLMs and
+AI agents read, search, and curate — over **REST · MCP · a React Library UI**.
+
+Highlights in 0.1.0:
+- **Structure-first ingestion** — extract → LLM structuring → faithfulness verification →
+  sections + retrieval chunks → hierarchical Atlas. Markdown is the single source of truth.
+- **Pluggable extraction (top-10)** with smart `primary → fallback` routing, large-PDF
+  splitting, auto language detection, and **broken-font / mojibake recovery** (deterministic
+  codepage repair + render+OCR for permutation-cipher pages, run in parallel).
+- **Hybrid retrieval** — BM25 + optional pgvector + knowledge graph fused with RRF and an
+  optional reranker. Graceful degradation: no pgvector → BM25; no LLM key → raw text.
+- **Read *and* write over MCP** (33 tools) plus a full REST API and a React Library UI
+  (Library, Search, Atlas, conflict review, versions, admin).
+- **Editable & versioned** — section editing with optimistic locking, full history, folder
+  ops, and per-section 3-way conflict resolution on re-import.
+- **Agent memory** (Markdown-native): remember / recall / observe / consolidate / forget.
+- **Secure-by-default** — opt-in auth, MCP fail-closed, signed asset URLs, webhook HMAC +
+  SSRF guard, rate limiting, upload caps, non-root containers, fully-local mode.
+
 ### OCR fallback now runs pages in parallel (huge garbled scans)
 - The render+vision OCR repair loop processed poor/garbled pages **serially**. A document
   whose text layer is broken on most pages (e.g. a 639-page custom-font manual where 600+
