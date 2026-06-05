@@ -55,6 +55,27 @@ def _map_concurrent(items, fn, concurrency):
         return list(ex.map(fn, items))
 
 
+def _resolve_folder_id(db, workspace_id: int, folder_id, folder_path,
+                       auto_file: bool, suggested):
+    """Decide the document's folder, resiliently.
+
+    folder_id takes priority (exact, no name ambiguity) — BUT only if it still exists in
+    this workspace. A stale folder_id (folder deleted, or stale client state) would
+    otherwise violate the documents->folders FK and fail the whole job on every retry.
+    When the id is missing we fall back to folder_path, then the auto-suggested path,
+    then root (None)."""
+    if folder_id is not None and db.folder_exists(workspace_id, folder_id):
+        return folder_id
+    if folder_id is not None:
+        log.warning("ingest: folder_id=%s not found in workspace %s — placing at root/path",
+                    folder_id, workspace_id)
+    if folder_path:
+        return db.ensure_folder_path(workspace_id, folder_path)
+    if auto_file and suggested:
+        return db.ensure_folder_path(workspace_id, suggested)
+    return None
+
+
 def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime: str,
            folder_path: str | None = None, folder_id: int | None = None,
            auto_file: bool = False, title_override: str | None = None,
@@ -257,14 +278,8 @@ def ingest(db: DB, *, workspace_id: int, file_bytes: bytes, filename: str, mime:
     language = detected_lang or (meta.get("language") or "").strip() or _guess_lang(full_md)
 
     # folder placement (folder_id takes priority — exact, no name ambiguity)
-    if folder_id is not None:
-        fid = folder_id
-    elif folder_path:
-        fid = db.ensure_folder_path(workspace_id, folder_path)
-    elif auto_file and meta.get("suggested_folder_path"):
-        fid = db.ensure_folder_path(workspace_id, meta["suggested_folder_path"])
-    else:
-        fid = None
+    fid = _resolve_folder_id(db, workspace_id, folder_id, folder_path, auto_file,
+                             meta.get("suggested_folder_path"))
 
     # 5.5 Reimport: skip / conflict-pending / replace (§6-bis)
     content_hash = hashlib.sha256(full_md.encode("utf-8")).hexdigest()

@@ -6,6 +6,15 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Ingestion no longer crashes on a stale folder_id
+- An upload carries the client-selected `folder_id`. If that folder was since deleted (or
+  the client held stale state), inserting `documents.folder_id=<stale>` violated the
+  `documents_folder_id_fkey` FK and failed the whole job on every retry
+  (`Key (folder_id)=(1) is not present in table "folders"`). Ingestion now validates the
+  id via `DB.folder_exists()` and falls back to `folder_path`, then the auto-suggested
+  path, then root — so a stale selection just files the document at root instead of
+  failing.
+
 ### Recover residual permutation-cipher garble (broken-font headers) via OCR
 - Some PDFs carry TWO corrupted text layers at once: a CP1251/KOI8-R-as-Latin1 body
   (deterministically repaired by `repair_encoding`) AND a custom-font **permutation

@@ -145,6 +145,16 @@ class DB:
                 parent_id = cur.fetchone()["id"]
         return parent_id
 
+    def folder_exists(self, ws: int, folder_id: int) -> bool:
+        """Whether a folder id exists in this workspace — used to validate a client-supplied
+        folder_id before inserting a document (a stale id would violate the FK)."""
+        if folder_id is None:
+            return False
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM folders WHERE id=%s AND workspace_id=%s",
+                        (folder_id, ws))
+            return cur.fetchone() is not None
+
     def create_subfolder(self, ws: int, parent_id: int | None, name: str) -> int:
         """Create a single child folder under `parent_id` (or a root if None) by
         display name. Computes a unique ltree path. Returns the new folder id."""
