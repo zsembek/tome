@@ -6,6 +6,21 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Recover residual permutation-cipher garble (broken-font headers) via OCR
+- Some PDFs carry TWO corrupted text layers at once: a CP1251/KOI8-R-as-Latin1 body
+  (deterministically repaired by `repair_encoding`) AND a custom-font **permutation
+  cipher** for section headers/titles that codepage re-decoding cannot fix. After the body
+  auto-repaired, the page looked ~95% clean, so the whole-page garble check no longer fired
+  and the still-garbled headers leaked into the output as junk section titles.
+- New token-level detector `text_has_residual_garble` flags a page that still contains
+  permutation garble after deterministic repair, so it is routed to the render+OCR
+  (vision) fallback and the clean OCR result replaces it. The detector is tuned to ignore
+  legitimate multi-language text — a clean Spanish/German/Polish page (México,
+  Repräsentanz, SPÓLKA) and hyphenated mixed-script product names score zero garble tokens.
+- Note: this recovery requires the OCR/vision fallback (`EXTRACT_FALLBACK=vision_llm`,
+  default) with a vision-capable model configured; with no AI key the body is still
+  repaired deterministically but permutation-only pages cannot be recovered.
+
 ### Object store: robust STORAGE_DIR + clear S3 error
 - `STORAGE_DIR` is now hardened against a leaked inline comment: some `env_file`
   parsers pass `STORAGE_DIR=    # note` through verbatim, which previously made the

@@ -5,7 +5,8 @@ import logging
 
 from tome.config import Config, get_config
 from tome.extract.base import (ExtractResult, Page, page_is_poor, repair_encoding,
-                               strip_control_chars, text_looks_garbled)
+                               strip_control_chars, text_has_residual_garble,
+                               text_looks_garbled)
 from tome.extract import pdfutil
 
 log = logging.getLogger(__name__)
@@ -244,8 +245,15 @@ def _repair_poor_pages(result: ExtractResult, pdf_bytes: bytes, fb_name: str,
                     txt = "\n\n".join(pg.text for pg in r.pages)
             # a garbled (broken-CMap) page has many junk chars, so don't gate on length —
             # replace whenever the OCR result is itself clean; otherwise keep the longer text.
+            # `was_residual` covers a page whose body already repaired but still carries a
+            # permutation-cipher header (whole-page text_looks_garbled is False there): we
+            # still want the clean OCR, but guard against swapping a mostly-clean body for a
+            # much shorter OCR read (keep >=50% of the length).
             was_garbled = text_looks_garbled(p.text)
-            if txt and not text_looks_garbled(txt) and (was_garbled or len(txt) > len(p.text)):
+            was_residual = text_has_residual_garble(p.text)
+            ocr_clean = bool(txt) and not text_looks_garbled(txt) and not text_has_residual_garble(txt)
+            if ocr_clean and (was_garbled or len(txt) > len(p.text)
+                              or (was_residual and len(txt) >= len(p.text) * 0.5)):
                 p.text = txt
                 p.char_count = len(txt)
         except Exception as exc:

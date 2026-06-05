@@ -79,6 +79,61 @@ def text_looks_garbled(text: str, *, min_chars: int = 120,
     return False
 
 
+def _is_garble_token(tok: str) -> bool:
+    """Whether ONE whitespace-delimited token is residual permutation-cipher garble that
+    survived deterministic codepage repair -- as opposed to a legitimate (possibly accented,
+    possibly non-English) word. Tells that NEVER occur in real words:
+      * a Latin-1 symbol glyph (U+00A0..U+00BF: superscripts, fractions, division/degree)
+        used as a letter,
+      * Cyrillic and Latin letters mixed INSIDE one contiguous letter run (script does not
+        switch mid-run in a real word; a hyphen-joined compound of two single-script parts
+        is fine),
+      * an UPPERCASE accented-Latin letter in the MIDDLE of a non-all-caps token,
+      * an overwhelming accented-Latin density (>=50%) -- real words have at most a few.
+    Legitimate accented/multi-language words (Spanish, German, Polish, French) trip none."""
+    letters = [c for c in tok if c.isalpha()]
+    if len(letters) < 2:
+        return False
+    if any(0x00A0 <= ord(c) <= 0x00BF for c in tok):
+        return True
+    # mixed script INSIDE one contiguous letter run (a hyphen/slash-joined compound of two
+    # single-script parts -- e.g. a Cyrillic brand glued to a Latin model name -- is
+    # legitimate and must not trip this).
+    for run in re.findall(r"[^\W\d_]+", tok, re.UNICODE):
+        rc = sum(1 for c in run if 0x0400 <= ord(c) <= 0x04FF)
+        rl = sum(1 for c in run if (0x41 <= ord(c) <= 0x5A) or (0x61 <= ord(c) <= 0x7A))
+        if rc and rl:
+            return True
+    accents = sum(1 for c in letters if 0x00C0 <= ord(c) <= 0x024F)
+    if accents / len(letters) >= 0.5:
+        return True
+    if tok.upper() != tok:                            # not an all-caps token
+        for a, b in zip(tok, tok[1:]):
+            if 0x00C0 <= ord(b) <= 0x024F and b.isupper() and a.islower():
+                return True
+    return False
+
+
+def text_has_residual_garble(text: str, *, min_chars: int = 120,
+                             min_tokens: int = 3, min_ratio: float = 0.06) -> bool:
+    """Whether a page STILL contains permutation-cipher garble after deterministic repair.
+
+    Deterministic `repair_encoding` fixes CP1251/KOI8-R-as-Latin1 body text, but a second,
+    custom-font permutation layer (typically section headers/titles) is left untouched and
+    can only be recovered by render+OCR. Once the body is repaired the page looks mostly
+    clean, so whole-page `text_looks_garbled` won't fire; this token-level check catches the
+    leftover so the page can be routed to the OCR fallback. Tuned to ignore legitimate
+    multi-language text (a clean Spanish/German/Polish page scores zero garble tokens)."""
+    if len([c for c in (text or "") if not c.isspace()]) < min_chars:
+        return False
+    toks = text.split()
+    total = sum(1 for t in toks if sum(c.isalpha() for c in t) >= 2)
+    if total == 0:
+        return False
+    suspect = sum(1 for t in toks if _is_garble_token(t))
+    return suspect >= min_tokens or (suspect / total) >= min_ratio
+
+
 def _cyrillic_ratio(text: str) -> float:
     letters = [c for c in text if c.isalpha()]
     if not letters:
@@ -151,5 +206,9 @@ def page_is_poor(page: Page, *, min_chars: int = 80) -> bool:
     if page.confidence is not None and page.confidence < 0.5:
         return True
     if text_looks_garbled(txt):
+        return True
+    # residual permutation-cipher garble that survived deterministic codepage repair
+    # (e.g. section headers in a second broken font) — only OCR can recover it
+    if text_has_residual_garble(txt):
         return True
     return False
