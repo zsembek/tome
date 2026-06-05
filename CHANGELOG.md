@@ -6,6 +6,15 @@ aims to adhere to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### OCR fallback now runs pages in parallel (huge garbled scans)
+- The render+vision OCR repair loop processed poor/garbled pages **serially**. A document
+  whose text layer is broken on most pages (e.g. a 639-page custom-font manual where 600+
+  pages need vision OCR) took ~one slow vision call (~10s) per page — well over an hour
+  stuck at "extract". The loop now runs pages **concurrently**, bounded by
+  `PAGE_CONCURRENCY` (default 6), matching the already-parallel structure stage. Each task
+  mutates only its own page and `render_page_png` opens a fresh PDF handle per call, so
+  there is no shared state. ~6x faster extraction on heavily-garbled scans.
+
 ### Ingestion no longer crashes on a stale folder_id
 - An upload carries the client-selected `folder_id`. If that folder was since deleted (or
   the client held stale state), inserting `documents.folder_id=<stale>` violated the

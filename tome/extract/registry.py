@@ -226,9 +226,11 @@ def _repair_poor_pages(result: ExtractResult, pdf_bytes: bytes, fb_name: str,
     if not result.pages:
         result.pages = [Page(number=i + 1, text="", char_count=0) for i in range(n)]
 
-    for p in result.pages:
-        if not page_is_poor(p):
-            continue
+    poor = [p for p in result.pages if page_is_poor(p)]
+    if not poor:
+        return result
+
+    def _repair_one(p):
         idx0 = p.number - 1
         try:
             if fb_name == "vision_llm":
@@ -258,4 +260,17 @@ def _repair_poor_pages(result: ExtractResult, pdf_bytes: bytes, fb_name: str,
                 p.char_count = len(txt)
         except Exception as exc:
             log.warning("fallback on page %d failed: %s", p.number, exc)
+
+    # Each render+OCR is a slow (~seconds) network call; a big garbled scan can have
+    # hundreds of poor pages. Run them CONCURRENTLY (bounded by PAGE_CONCURRENCY) — each
+    # task mutates its OWN page, and render_page_png opens a fresh PDF handle per call, so
+    # there is no shared mutable state across threads.
+    conc = max(1, int(getattr(cfg, "page_concurrency", 1) or 1))
+    if conc == 1 or len(poor) == 1:
+        for p in poor:
+            _repair_one(p)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(conc, len(poor))) as ex:
+            list(ex.map(_repair_one, poor))
     return result
