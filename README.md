@@ -20,19 +20,7 @@ and curate.
 
 ---
 
-<div align="center">
 
-### ▶ Demo — see it in action
-
-<img src="assets/social-preview.png" alt="Tome — the agent-native knowledge OS" width="820" />
-
-<sub>📹 <b>A live demo GIF goes here.</b> Record a 30–60s capture of the Library UI and an
-agent walking the Atlas (folder → document → section over MCP), save it as
-<code>docs/demo.gif</code>, and uncomment the line below — it renders automatically.</sub>
-
-<!-- <img src="docs/demo.gif" alt="Tome demo: the Library UI and an agent navigating the Atlas over MCP" width="820" /> -->
-
-</div>
 
 ---
 
